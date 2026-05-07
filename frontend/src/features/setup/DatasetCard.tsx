@@ -11,7 +11,7 @@
  */
 
 import { useState } from "react";
-import { Pencil, RefreshCw, Upload } from "lucide-react";
+import { CheckCircle, Pencil, RefreshCw, Upload } from "lucide-react";
 
 import { Banner } from "../../components/ui/Banner";
 import { Card } from "../../components/ui/Card";
@@ -106,8 +106,8 @@ export function DatasetCard({ projectId, disabled }: Props) {
   return (
     <>
       <Card
-        title="Dataset"
-        desc="Questions + applications + (optional) demographic / metadata columns. Upload one CSV or Excel; tag the columns; the rest is automatic."
+        title="Applications"
+        desc="CSV or XLSX. Map columns after upload. Demographic columns are excluded from LLM context."
         action={
           !disabled && hasData && !inMappingState ? (
             <button
@@ -282,33 +282,81 @@ function DatasetSummary({
   applicationCount: number;
   scoredCount: number;
 }) {
-  const counts = {
-    question: questions.filter((q) => q.type === "question").length,
-    demographic: questions.filter((q) => q.type === "demographic").length,
-    metadata: questions.filter((q) => q.type === "metadata").length,
-  };
+  const questionFields = questions.filter((q) => q.type === "question");
+  const demographicFields = questions.filter((q) => q.type === "demographic");
+  const metadataFields = questions.filter((q) => q.type === "metadata");
+
+  const summaryRange = (n: number, prefix: string) =>
+    n === 0 ? "—" : n === 1 ? `${prefix}1` : `${prefix}1…${prefix}${n}`;
 
   return (
     <div className="grid gap-3">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat label="Applications" value={applicationCount} />
-        <Stat label="Questions" value={counts.question} />
-        <Stat
-          label="Demographic fields"
-          value={counts.demographic}
-          muted={counts.demographic === 0}
+      {/* Header row — green check + filename-equivalent text + key counts. */}
+      <div className="flex items-center gap-3">
+        <div
+          className="grid place-items-center rounded-[var(--radius)] border border-[var(--green-border)]"
+          style={{
+            width: 36,
+            height: 36,
+            background: "var(--green-bg)",
+            color: "var(--green)",
+          }}
+        >
+          <CheckCircle className="w-4 h-4" />
+        </div>
+        <div className="min-w-0">
+          <div className="text-sm font-medium">Dataset loaded</div>
+          <div className="text-xs text-[var(--fg-muted)]">
+            {applicationCount} applications · {questionFields.length} question
+            column{questionFields.length === 1 ? "" : "s"}
+            {demographicFields.length > 0 &&
+              ` · ${demographicFields.length} demographic flagged`}
+            {metadataFields.length > 0 &&
+              ` · ${metadataFields.length} metadata`}
+          </div>
+        </div>
+      </div>
+
+      {/* 4-card grid: key / value / qualifier — matches the design handoff. */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+        <KvCell
+          label="Application ID"
+          value="external_id"
+          qualifier={applicationCount > 0 ? "ok" : "—"}
         />
-        <Stat
-          label="Metadata fields"
-          value={counts.metadata}
-          muted={counts.metadata === 0}
+        <KvCell
+          label={`Question${questionFields.length === 1 ? "" : "s"} 1–${questionFields.length}`}
+          value={summaryRange(questionFields.length, "q")}
+          qualifier={questionFields.length > 0 ? "ok" : "none"}
+        />
+        <KvCell
+          label="Demographics"
+          value={
+            demographicFields.length === 0
+              ? "none flagged"
+              : demographicFields.map((q) => q.key).slice(0, 3).join(", ") +
+                (demographicFields.length > 3 ? "…" : "")
+          }
+          qualifier="excluded from LLM"
+        />
+        <KvCell
+          label="Metadata"
+          value={
+            metadataFields.length === 0
+              ? "none flagged"
+              : metadataFields.map((q) => q.key).slice(0, 3).join(", ") +
+                (metadataFields.length > 3 ? "…" : "")
+          }
+          qualifier="excluded from LLM"
         />
       </div>
+
       {applicationCount > 0 && (
         <div className="text-xs text-[var(--fg-muted)] [font-variant-numeric:tabular-nums]">
           {scoredCount}/{applicationCount} applications have at least one human score.
         </div>
       )}
+
       {questions.length > 0 && (
         <details className="text-xs">
           <summary className="cursor-pointer text-[var(--fg-faint)] hover:text-[var(--fg)]">
@@ -337,24 +385,30 @@ function DatasetSummary({
   );
 }
 
-function Stat({
+/** Small key/value/qualifier cell — the prototype's signature display block
+ *  for confirmed dataset state. Sunken bg, three lines. */
+function KvCell({
   label,
   value,
-  muted,
+  qualifier,
 }: {
   label: string;
-  value: number;
-  muted?: boolean;
+  value: string;
+  qualifier: string;
 }) {
   return (
-    <div className="px-3 py-2 rounded-[var(--radius-sm)] border border-[var(--border)]">
-      <div className="text-xs text-[var(--fg-muted)] mb-0.5">{label}</div>
-      <div
-        className={`text-xl font-semibold [font-variant-numeric:tabular-nums] ${
-          muted ? "text-[var(--fg-faint)]" : ""
-        }`}
-      >
+    <div
+      className="px-2.5 py-2 rounded-[var(--radius-sm)]"
+      style={{ background: "var(--bg-sunken)" }}
+    >
+      <div className="text-[var(--fg-faint)]" style={{ fontSize: 11 }}>
+        {label}
+      </div>
+      <div className="font-mono text-[var(--fg)] truncate" style={{ fontSize: 12 }}>
         {value}
+      </div>
+      <div className="text-[var(--fg-subtle)]" style={{ fontSize: 10 }}>
+        {qualifier}
       </div>
     </div>
   );

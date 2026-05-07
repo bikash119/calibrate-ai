@@ -120,9 +120,10 @@ export function ColumnMappingModal({
         <div>
           <h3 className="text-sm font-semibold tracking-tight">Map columns</h3>
           <p className="text-xs text-[var(--fg-muted)] mt-0.5">
-            One row per column. Tag each one. <strong>Demographic</strong> and{" "}
-            <strong>Metadata</strong> are stored but excluded from the LLM prompt — opt
-            them into a criterion's feeding fields later if you want them scored.
+            Confirm what each column is. <strong>Demographic</strong> columns are
+            <strong> not passed to the LLM</strong> — they're held aside for silent
+            bias-audit computation only. <strong>Metadata</strong> is also excluded
+            by default; you can opt either into a criterion's feeding fields later.
           </p>
         </div>
         <button className="btn btn-ghost btn-sm" onClick={onCancel} disabled={submitting}>
@@ -250,10 +251,11 @@ export function ColumnMappingModal({
           </table>
         </div>
 
-        <Banner kind="info" title="Demographic & metadata are excluded from prompts by default">
-          They're stored alongside your dataset and you can opt them into a
-          criterion's feeding fields later. The LLM never sees them unless
-          you explicitly add them.
+        <Banner kind="info" title="Bias-audit columns are isolated">
+          Roles tagged "Demographic" are stripped from the prompt context.
+          The platform may compute aggregate score statistics across them
+          after scoring but never shows individual group scores during
+          iteration. Metadata fields follow the same exclusion rule.
         </Banner>
 
         {error && (

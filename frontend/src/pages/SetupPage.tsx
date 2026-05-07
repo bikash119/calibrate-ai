@@ -98,6 +98,16 @@ export function SetupPage() {
         <RubricCard projectId={projectId} disabled={isPastSetup} />
         <HumanScoresCard projectId={projectId} disabled={isPastSetup} />
         <SplitsCard projectId={projectId} disabled={isPastSetup} />
+
+        {/* Cohort-size hint — mirrors the prototype's bottom-of-setup banner. */}
+        <Banner
+          kind={(apps.data?.applications.length ?? 0) >= 10 ? "info" : "warn"}
+          title={`Cohort size: ${apps.data?.applications.length ?? 0} / 10 minimum`}
+        >
+          The 60/20/20 holdout split needs at least 10 applications to produce a
+          meaningful test set. Larger cohorts (250+) give tighter human-human
+          confidence intervals; that's the practical floor for production calibration.
+        </Banner>
       </div>
 
       {/* Continue footer */}
