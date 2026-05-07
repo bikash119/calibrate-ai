@@ -3,7 +3,7 @@
  * backend, so saving edits creates a NEW iteration with the modified prompts.
  */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Pencil, Save, X } from "lucide-react";
 
 import { Card } from "../../components/ui/Card";
@@ -29,15 +29,15 @@ export function PromptsPanel({ iteration, onSave, saving, error, disabled }: Pro
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Draft>({ prompts: new Map(), note: "" });
 
-  // Reset draft whenever the active iteration changes or we enter edit mode.
-  useEffect(() => {
-    if (!editing) return;
+  // Initialize the draft synchronously when the user clicks Edit. Rebuilding
+  // on every iteration prop change isn't needed — clicking Edit again
+  // re-seeds.
+  const startEdit = () => {
     const map = new Map<number, string>();
     for (const p of iteration.prompts) map.set(p.criterion_id, p.system_prompt);
     setDraft({ prompts: map, note: `Edit of v${iteration.version}` });
-  }, [editing, iteration.id, iteration.version, iteration.prompts]);
-
-  const startEdit = () => setEditing(true);
+    setEditing(true);
+  };
   const cancel = () => setEditing(false);
 
   const handleSave = async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";   // useEffect kept for CriterionEditor's anchor pruning
 import { Pencil, Plus, Trash2 } from "lucide-react";
 
 import { Card } from "../../components/ui/Card";
@@ -19,13 +19,10 @@ export function RubricCard({ projectId, disabled }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<CriterionInput[]>([]);
 
-  useEffect(() => {
-    if (editing && rubric.data) {
-      setDraft(rubric.data.criteria.map(toInput));
-    }
-  }, [editing, rubric.data]);
-
-  const startEdit = () => setEditing(true);
+  const startEdit = () => {
+    setDraft(rubric.data ? rubric.data.criteria.map(toInput) : []);
+    setEditing(true);
+  };
   const cancel = () => {
     setEditing(false);
     save.reset();

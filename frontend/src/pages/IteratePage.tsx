@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { Banner } from "../components/ui/Banner";
@@ -29,33 +29,34 @@ export function IteratePage() {
   const iterations = useIterations(projectId);
   const create = useCreateIteration(projectId ?? 0);
 
+  // selectedId is set when the user clicks (or after we create a new iteration);
+  // when null, we fall back to the latest. Keeping these as separate states
+  // (rather than syncing in an effect) avoids cascading renders.
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const detail = useIteration(projectId, selectedId ?? undefined);
-
-  const [tab, setTab] = useState<WorkbenchTab>("prompts");
-  const [scoringSplit, setScoringSplit] = useState<ScoringSplit>("dev");
-  const [diffFromVersion, setDiffFromVersion] = useState<number | null>(null);
-
   const latestId = useMemo(() => {
     const list = iterations.data?.iterations ?? [];
     if (list.length === 0) return null;
     return list.reduce((a, b) => (a.version > b.version ? a : b)).id;
   }, [iterations.data]);
+  const activeId = selectedId ?? latestId;
+  const detail = useIteration(projectId, activeId ?? undefined);
 
-  useEffect(() => {
-    if (selectedId == null && latestId != null) setSelectedId(latestId);
-  }, [selectedId, latestId]);
+  const [tab, setTab] = useState<WorkbenchTab>("prompts");
+  const [scoringSplit, setScoringSplit] = useState<ScoringSplit>("dev");
+  const [diffFromVersion, setDiffFromVersion] = useState<number | null>(null);
 
-  // Default the diff "from" picker to the previous version when switching to the diff tab
-  useEffect(() => {
-    if (tab !== "diff" || !detail.data || diffFromVersion != null) return;
-    const list = iterations.data?.iterations ?? [];
-    const earlier = list
-      .filter((it) => it.version < detail.data!.version)
-      .map((it) => it.version)
-      .sort((a, b) => b - a);
-    if (earlier.length > 0) setDiffFromVersion(earlier[0]);
-  }, [tab, detail.data, iterations.data, diffFromVersion]);
+  /** Switch tabs; when entering the diff tab without a chosen base, default
+   *  to v(N-1) so the operator sees something useful immediately. */
+  const onTabChange = (next: WorkbenchTab) => {
+    if (next === "diff" && diffFromVersion == null && detail.data) {
+      const earlier = (iterations.data?.iterations ?? [])
+        .filter((it) => it.version < detail.data!.version)
+        .map((it) => it.version)
+        .sort((a, b) => b - a);
+      if (earlier.length > 0) setDiffFromVersion(earlier[0]);
+    }
+    setTab(next);
+  };
 
   if (!projectId) return null;
 
@@ -109,7 +110,7 @@ export function IteratePage() {
         <div>
           <IterationsList
             iterations={iterations.data?.iterations ?? []}
-            selectedId={selectedId}
+            selectedId={activeId}
             onSelect={(id) => {
               setSelectedId(id);
               setDiffFromVersion(null);
@@ -143,7 +144,7 @@ export function IteratePage() {
                 split={scoringSplit}
               />
 
-              <TabStrip current={tab} onChange={setTab} />
+              <TabStrip current={tab} onChange={onTabChange} />
 
               {tab === "prompts" && (
                 <PromptsPanel

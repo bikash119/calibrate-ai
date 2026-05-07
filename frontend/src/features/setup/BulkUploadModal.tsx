@@ -66,7 +66,7 @@ export function BulkUploadModal<T>({
       }
       const items = csv.rows.map((r) => parseCsvRow(r, csv.headers));
       return { items, preview: items.slice(0, previewLimit), csv };
-    } catch (e) {
+    } catch {
       // Surface parse errors lazily — only when user submits — so they don't
       // flash while typing. We just return null.
       return null;

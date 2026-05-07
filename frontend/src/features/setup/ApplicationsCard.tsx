@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Upload } from "lucide-react";
 
 import { Card } from "../../components/ui/Card";
@@ -29,7 +29,10 @@ export function ApplicationsCard({ projectId, disabled }: Props) {
   const total = apps.data?.applications.length ?? 0;
   const scored = apps.data?.applications.filter((a) => a.has_human_scores).length ?? 0;
 
-  const validKeys = new Set((questions.data?.questions ?? []).map((q) => q.key));
+  const validKeys = useMemo(
+    () => new Set((questions.data?.questions ?? []).map((q) => q.key)),
+    [questions.data],
+  );
 
   const parseCsvRow = useCallback(
     (row: Record<string, string>, headers: string[]): ApplicationUpload => {

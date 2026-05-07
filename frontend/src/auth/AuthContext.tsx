@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 
 export interface AuthUser {
   id: number;
@@ -26,26 +26,30 @@ const AuthContext = createContext<AuthContextType>({
 const TOKEN_KEY = "scoring_ai_token";
 const USER_KEY = "scoring_ai_user";
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  // Restore session from localStorage on mount
-  useEffect(() => {
-    const savedToken = localStorage.getItem(TOKEN_KEY);
-    const savedUser = localStorage.getItem(USER_KEY);
-    if (savedToken && savedUser) {
-      try {
-        setToken(savedToken);
-        setUser(JSON.parse(savedUser));
-      } catch {
-        localStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(USER_KEY);
-      }
+/** Read the persisted session synchronously so AuthProvider can use it as a
+ *  lazy initializer for useState — no effect-then-setState dance needed. */
+function readPersistedSession(): { user: AuthUser | null; token: string | null } {
+  try {
+    const token = localStorage.getItem(TOKEN_KEY);
+    const userJson = localStorage.getItem(USER_KEY);
+    if (token && userJson) {
+      return { user: JSON.parse(userJson) as AuthUser, token };
     }
-    setLoading(false);
-  }, []);
+  } catch {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+  }
+  return { user: null, token: null };
+}
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  // Lazy initializer reads localStorage exactly once during mount; nothing
+  // is async, so `loading` is always false. Kept in the API for backward
+  // compatibility with consumers that gate on it.
+  const [{ user, token }, setSession] = useState(readPersistedSession);
+  const setUser = (u: AuthUser | null) => setSession((s) => ({ ...s, user: u }));
+  const setToken = (t: string | null) => setSession((s) => ({ ...s, token: t }));
+  const loading = false;
 
   const login = async (username: string, password: string) => {
     const res = await fetch("/api/auth/login", {
@@ -93,6 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth() {
   return useContext(AuthContext);
 }

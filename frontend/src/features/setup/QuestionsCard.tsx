@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 
 import { Card } from "../../components/ui/Card";
@@ -16,9 +16,10 @@ export function QuestionsCard({ projectId, disabled }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<QuestionInput[]>([]);
 
-  // Reset the draft whenever we enter edit mode or data changes underneath us
-  useEffect(() => {
-    if (editing && data) {
+  // Snapshot data into the draft when the user clicks Edit. We re-seed each
+  // time edit mode opens, so the operator always starts from server state.
+  const startEdit = () => {
+    if (data) {
       setDraft(
         data.questions.map((q) => ({
           key: q.key,
@@ -26,10 +27,11 @@ export function QuestionsCard({ projectId, disabled }: Props) {
           sort_order: q.sort_order,
         })),
       );
+    } else {
+      setDraft([]);
     }
-  }, [editing, data]);
-
-  const startEdit = () => setEditing(true);
+    setEditing(true);
+  };
   const cancel = () => {
     setEditing(false);
     save.reset();

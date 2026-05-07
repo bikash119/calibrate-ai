@@ -27,6 +27,7 @@ export function TrafficLight({ status, size = 8 }: TrafficLightProps) {
  * Yellow: outside CI but within 0.10 QWK of lower bound
  * Red: more than 0.10 below lower bound
  */
+// eslint-disable-next-line react-refresh/only-export-components
 export function trafficStatusFor(
   llmH: number,
   hh: { qwkLow: number },
