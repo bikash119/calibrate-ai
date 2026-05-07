@@ -1,9 +1,12 @@
 import { useState } from "react";
-import { Upload } from "lucide-react";
+import { LayoutGrid, Upload } from "lucide-react";
 
 import { Card } from "../../components/ui/Card";
 import { useHumanScores, useUploadHumanScores } from "../../hooks/useDataset";
+import { useRubric } from "../../hooks/useRubric";
 import { BulkUploadModal } from "./BulkUploadModal";
+import { CoverageMatrixModal } from "./CoverageMatrixModal";
+import { WideUploadModal } from "./WideUploadModal";
 
 interface Props {
   projectId: number;
@@ -40,18 +43,43 @@ function parseCsvRow(row: Record<string, string>, headers: string[]): HumanScore
   };
 }
 
+type UploadMode = "wide" | "long";
+
 export function HumanScoresCard({ projectId, disabled }: Props) {
   const scores = useHumanScores(projectId);
+  const rubric = useRubric(projectId);
   const upload = useUploadHumanScores(projectId);
-  const [showUpload, setShowUpload] = useState(false);
+  const [uploadMode, setUploadMode] = useState<UploadMode | null>(null);
+  const [showCoverage, setShowCoverage] = useState(false);
 
   const total = scores.data?.scores.length ?? 0;
   const evaluators = new Set(scores.data?.scores.map((s) => s.evaluator_id) ?? []);
+  const criteriaNames = (rubric.data?.criteria ?? []).map((c) => c.name);
 
   const action = !disabled && (
-    <button className="btn btn-sm" onClick={() => setShowUpload(true)}>
-      <Upload className="w-3 h-3" /> Upload
-    </button>
+    <div className="flex items-center gap-1.5">
+      {total > 0 && (
+        <button
+          className="btn btn-sm"
+          onClick={() => setShowCoverage(true)}
+          title="Coverage matrix — apps scored per evaluator × criterion"
+        >
+          <LayoutGrid className="w-3 h-3" /> Coverage
+        </button>
+      )}
+      <button
+        className="btn btn-sm"
+        onClick={() => setUploadMode("wide")}
+        disabled={criteriaNames.length === 0}
+        title={
+          criteriaNames.length === 0
+            ? "Save the rubric first — wide-format detection needs criterion names"
+            : undefined
+        }
+      >
+        <Upload className="w-3 h-3" /> Upload
+      </button>
+    </div>
   );
 
   return (
@@ -77,9 +105,29 @@ export function HumanScoresCard({ projectId, disabled }: Props) {
         )}
       </Card>
 
-      {showUpload && (
+      {uploadMode === "wide" && (
+        <WideUploadModal
+          criteriaNames={criteriaNames}
+          onClose={() => {
+            setUploadMode(null);
+            upload.reset();
+          }}
+          onSubmit={async (rows) => {
+            await upload.mutateAsync(rows);
+            setUploadMode(null);
+          }}
+          onSwitchToLong={() => {
+            upload.reset();
+            setUploadMode("long");
+          }}
+          submitting={upload.isPending}
+          error={upload.error?.message ?? null}
+        />
+      )}
+
+      {uploadMode === "long" && (
         <BulkUploadModal<HumanScoreUpload>
-          title="Upload human scores"
+          title="Upload human scores (long format)"
           desc="One row per (evaluator, application, criterion). Score must be an integer within the criterion's scale."
           csvSchemaSpec={`Required columns (in any order):
   external_id      — application identifier
@@ -103,15 +151,23 @@ app-001,market,bob,4`}
 ]`}
           parseCsvRow={parseCsvRow}
           onClose={() => {
-            setShowUpload(false);
+            setUploadMode(null);
             upload.reset();
           }}
           onSubmit={async (parsed) => {
             await upload.mutateAsync(parsed);
-            setShowUpload(false);
+            setUploadMode(null);
           }}
           submitting={upload.isPending}
           error={upload.error?.message ?? null}
+        />
+      )}
+
+      {showCoverage && (
+        <CoverageMatrixModal
+          scores={scores.data?.scores ?? []}
+          criteria={rubric.data?.criteria ?? []}
+          onClose={() => setShowCoverage(false)}
         />
       )}
     </>

@@ -9,6 +9,7 @@
 import { RefreshCw } from "lucide-react";
 
 import { Card } from "../../components/ui/Card";
+import { SplitStrip } from "../../components/ui/SplitStrip";
 import { MetricsTable } from "../metrics/MetricsTable";
 import { useBaseline } from "../../hooks/useBaseline";
 import {
@@ -36,6 +37,8 @@ export function IterationMetricsCard({
 
   const overallLlm = pickOverall(metrics.data?.overall ?? []);
   const overallHh = pickOverall(baseline.data?.overall ?? []);
+  const overallExact = pickMetric(metrics.data?.overall ?? [], "exact");
+  const overallWithin1 = pickMetric(metrics.data?.overall ?? [], "within_1");
   const baselineByCriterion = buildBaselineMap(baseline.data?.per_criterion ?? []);
   const hasMetrics = (metrics.data?.per_criterion.length ?? 0) > 0;
 
@@ -70,6 +73,16 @@ export function IterationMetricsCard({
           }
         />
       </div>
+
+      {hasMetrics && (
+        <div className="mb-4">
+          <SplitStrip
+            exact={overallExact?.value ?? null}
+            within1={overallWithin1?.value ?? null}
+            n={overallLlm?.n ?? overallExact?.n ?? null}
+          />
+        </div>
+      )}
 
       {!hasMetrics ? (
         <div className="text-sm text-[var(--fg-muted)]">
@@ -125,6 +138,13 @@ function Hero({
 
 function pickOverall(rows: AgreementMetricItem[]): AgreementMetricItem | undefined {
   return rows.find((r) => r.metric === "qwk" && r.criterion_id == null);
+}
+
+function pickMetric(
+  rows: AgreementMetricItem[],
+  metric: string,
+): AgreementMetricItem | undefined {
+  return rows.find((r) => r.metric === metric && r.criterion_id == null);
 }
 
 function buildBaselineMap(
