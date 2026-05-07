@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowRight, BarChart3, RefreshCw } from "lucide-react";
+import { ArrowRight, BarChart3, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 
 import { Banner } from "../components/ui/Banner";
 import { Card } from "../components/ui/Card";
@@ -10,6 +11,8 @@ import { useProject } from "../hooks/useProjects";
 import { useTransitionProject } from "../hooks/useTransition";
 import type { AgreementMetricItem } from "../schemas";
 
+const DETAILS_KEY = "calibrate.baseline.showDetails";
+
 export function BaselinePage() {
   const { projectId: projectIdStr } = useParams<{ projectId: string }>();
   const projectId = projectIdStr ? Number(projectIdStr) : undefined;
@@ -19,6 +22,17 @@ export function BaselinePage() {
   const baseline = useBaseline(projectId);
   const compute = useComputeBaseline(projectId ?? 0);
   const transition = useTransitionProject(projectId ?? 0);
+
+  // Default-collapsed once metrics exist — operator can re-open. Persisted so
+  // the choice sticks across reloads.
+  const [showDetails, setShowDetails] = useState<boolean>(
+    () => localStorage.getItem(DETAILS_KEY) === "1",
+  );
+  const toggleDetails = () => {
+    const next = !showDetails;
+    setShowDetails(next);
+    localStorage.setItem(DETAILS_KEY, next ? "1" : "0");
+  };
 
   if (!projectId) return null;
 
@@ -114,6 +128,22 @@ export function BaselinePage() {
       <Card
         title="Per-criterion agreement"
         desc="QWK with bootstrap 95% CI, exact agreement, within-1 agreement, and Krippendorff's α."
+        action={
+          hasMetrics ? (
+            <button
+              className="btn btn-sm"
+              onClick={toggleDetails}
+              aria-expanded={showDetails}
+            >
+              {showDetails ? (
+                <ChevronDown className="w-3 h-3" />
+              ) : (
+                <ChevronRight className="w-3 h-3" />
+              )}
+              {showDetails ? "Hide details" : "Show details"}
+            </button>
+          ) : undefined
+        }
       >
         {baseline.isLoading ? (
           <div className="text-sm text-[var(--fg-muted)]">Loading…</div>
@@ -121,8 +151,10 @@ export function BaselinePage() {
           <div className="text-sm text-[var(--fg-muted)] flex items-center gap-2">
             <BarChart3 className="w-4 h-4" /> Run <em>Compute baseline</em> to populate metrics.
           </div>
-        ) : (
+        ) : showDetails ? (
           <MetricsTable rows={baseline.data?.per_criterion ?? []} />
+        ) : (
+          <CriterionSummary rows={baseline.data?.per_criterion ?? []} />
         )}
       </Card>
 
@@ -190,6 +222,54 @@ function HeroStat({
 
 function pickOverallQwk(rows: AgreementMetricItem[]): AgreementMetricItem | undefined {
   return rows.find((r) => r.metric === "qwk" && r.criterion_id == null);
+}
+
+/** Compact one-line-per-criterion summary shown when details are hidden. */
+function CriterionSummary({ rows }: { rows: AgreementMetricItem[] }) {
+  const qwks = rows
+    .filter((r) => r.metric === "qwk" && r.criterion_id != null)
+    .sort((a, b) => (a.criterion_name ?? "").localeCompare(b.criterion_name ?? ""));
+  if (qwks.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-2">
+      {qwks.map((r, i) => {
+        const v = r.value;
+        // Color thresholds match common QWK rule of thumb: ≥0.7 strong,
+        // ≥0.5 fair, anything below needs attention.
+        const tone =
+          v == null
+            ? "muted"
+            : v >= 0.7
+              ? "green"
+              : v >= 0.5
+                ? "yellow"
+                : "red";
+        return (
+          <span
+            key={r.criterion_id ?? r.criterion_name ?? `row-${i}`}
+            className="inline-flex items-baseline gap-1.5 px-2.5 py-1 rounded-[var(--radius-sm)] border text-xs"
+            style={{
+              borderColor:
+                tone === "muted" ? "var(--border)" : `var(--${tone}-border)`,
+              background:
+                tone === "muted"
+                  ? "var(--bg-elevated)"
+                  : `var(--${tone}-bg)`,
+            }}
+            title={`n=${r.n ?? "?"}`}
+          >
+            <span className="text-[var(--fg-muted)]">{r.criterion_name}</span>
+            <span
+              className="font-semibold [font-variant-numeric:tabular-nums]"
+              style={{ color: tone === "muted" ? "inherit" : `var(--${tone})` }}
+            >
+              {v != null ? v.toFixed(2) : "—"}
+            </span>
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 function pairCount(n: number): number {

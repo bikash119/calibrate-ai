@@ -6,6 +6,7 @@ import { PageHead } from "../components/ui/PageHead";
 import { CalibrationExamplesPanel } from "../features/iterate/CalibrationExamplesPanel";
 import { DiffViewer } from "../features/iterate/DiffViewer";
 import { DisagreementsPanel } from "../features/iterate/DisagreementsPanel";
+import { HistoryPanel } from "../features/iterate/HistoryPanel";
 import { IterationsList } from "../features/iterate/IterationsList";
 import { IterationMetricsCard } from "../features/iterate/IterationMetricsCard";
 import { PromptsPanel } from "../features/iterate/PromptsPanel";
@@ -18,7 +19,7 @@ import {
 import { useProject } from "../hooks/useProjects";
 import type { SplitName } from "../schemas";
 
-type WorkbenchTab = "prompts" | "disagreements" | "examples" | "diff";
+type WorkbenchTab = "triage" | "edit" | "calibration" | "diff" | "history";
 type ScoringSplit = Extract<SplitName, "dev" | "validation">;
 
 export function IteratePage() {
@@ -41,7 +42,9 @@ export function IteratePage() {
   const activeId = selectedId ?? latestId;
   const detail = useIteration(projectId, activeId ?? undefined);
 
-  const [tab, setTab] = useState<WorkbenchTab>("prompts");
+  // Triage is the default landing tab — it's where most iteration time is
+  // spent (look at disagreements, decide who's right, flag for calibration).
+  const [tab, setTab] = useState<WorkbenchTab>("triage");
   const [scoringSplit, setScoringSplit] = useState<ScoringSplit>("dev");
   const [diffFromVersion, setDiffFromVersion] = useState<number | null>(null);
 
@@ -146,7 +149,14 @@ export function IteratePage() {
 
               <TabStrip current={tab} onChange={onTabChange} />
 
-              {tab === "prompts" && (
+              {tab === "triage" && (
+                <DisagreementsPanel
+                  projectId={projectId}
+                  iterationId={detail.data.id}
+                  split={scoringSplit}
+                />
+              )}
+              {tab === "edit" && (
                 <PromptsPanel
                   iteration={detail.data}
                   onSave={saveEdited}
@@ -155,14 +165,7 @@ export function IteratePage() {
                   disabled={!stateOk}
                 />
               )}
-              {tab === "disagreements" && (
-                <DisagreementsPanel
-                  projectId={projectId}
-                  iterationId={detail.data.id}
-                  split={scoringSplit}
-                />
-              )}
-              {tab === "examples" && (
+              {tab === "calibration" && (
                 <CalibrationExamplesPanel
                   projectId={projectId}
                   initialCriterionId={detail.data.prompts[0]?.criterion_id}
@@ -175,6 +178,16 @@ export function IteratePage() {
                   iterations={iterations.data?.iterations ?? []}
                   fromVersion={diffFromVersion}
                   onFromVersionChange={setDiffFromVersion}
+                />
+              )}
+              {tab === "history" && (
+                <HistoryPanel
+                  iterations={iterations.data?.iterations ?? []}
+                  activeId={activeId}
+                  onSelect={(id) => {
+                    setSelectedId(id);
+                    setDiffFromVersion(null);
+                  }}
                 />
               )}
             </>
@@ -233,10 +246,11 @@ function TabStrip({
   onChange: (t: WorkbenchTab) => void;
 }) {
   const tabs: { id: WorkbenchTab; label: string }[] = [
-    { id: "prompts", label: "Prompts" },
-    { id: "disagreements", label: "Disagreements" },
-    { id: "examples", label: "Calibration examples" },
+    { id: "triage", label: "Triage" },
+    { id: "edit", label: "Edit" },
+    { id: "calibration", label: "Calibration" },
     { id: "diff", label: "Diff" },
+    { id: "history", label: "History" },
   ];
   return (
     <div className="flex gap-1 border-b border-[var(--border)]">
