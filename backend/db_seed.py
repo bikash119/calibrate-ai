@@ -15,6 +15,12 @@ import logging
 import os
 import sys
 
+from dotenv import load_dotenv
+
+# Load .env BEFORE importing modules that read env at import time.
+# api.main does the same; this keeps seed-time and runtime env consistent.
+load_dotenv()
+
 from api.auth import hash_password
 from database import get_db_path, init_db, reset_db
 from db_models import Program, ProgramRepository, User, UserRepository

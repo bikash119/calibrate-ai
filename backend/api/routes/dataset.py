@@ -1,4 +1,7 @@
-"""Dataset API — questions, applications, human scores. Nested under /api/projects/{id}."""
+"""Dataset API — read-only views over questions/applications and human-score
+upload. Question + application creation goes through the import wizard
+(`api/routes/dataset_import.py`), not this file.
+"""
 
 import logging
 
@@ -14,7 +17,6 @@ from api.schemas import (
     HumanScoresResponse,
     QuestionItem,
     QuestionsResponse,
-    QuestionsSaveRequest,
 )
 from api.services.dataset_service import DatasetService
 
@@ -24,7 +26,7 @@ router = APIRouter(prefix="/api/projects/{project_id}", tags=["dataset"])
 
 
 # ------------------------------------------------------------------ #
-# Questions                                                          #
+# Questions (read-only — creation lives in the import flow)          #
 # ------------------------------------------------------------------ #
 
 
@@ -40,37 +42,21 @@ def list_questions(
         raise HTTPException(status_code=404, detail=str(e))
     return QuestionsResponse(
         project_id=project_id,
-        questions=[QuestionItem(id=q.id, key=q.key, text=q.text, sort_order=q.sort_order) for q in questions],
-    )
-
-
-@router.put("/questions", response_model=QuestionsResponse)
-def save_questions(
-    project_id: int,
-    body: QuestionsSaveRequest,
-    current_user: dict = Depends(get_current_user),
-) -> QuestionsResponse:
-    """Atomically replace the question schema for this project."""
-    service = DatasetService()
-    try:
-        service.save_questions(
-            project_id,
-            [q.model_dump() for q in body.questions],
-            int(current_user["sub"]),
-        )
-    except ValueError as e:
-        if "not found" in str(e).lower():
-            raise HTTPException(status_code=404, detail=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
-    questions = service.get_questions(project_id)
-    return QuestionsResponse(
-        project_id=project_id,
-        questions=[QuestionItem(id=q.id, key=q.key, text=q.text, sort_order=q.sort_order) for q in questions],
+        questions=[
+            QuestionItem(
+                id=q.id,
+                key=q.key,
+                text=q.text,
+                type=q.type,
+                sort_order=q.sort_order,
+            )
+            for q in questions
+        ],
     )
 
 
 # ------------------------------------------------------------------ #
-# Applications                                                       #
+# Applications (read-only — creation lives in the import flow)       #
 # ------------------------------------------------------------------ #
 
 
@@ -101,24 +87,6 @@ def get_application(
         return ApplicationDetail(**DatasetService().get_application(project_id, application_id))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-
-
-@router.post("/applications", status_code=201)
-def upsert_applications(
-    project_id: int,
-    applications: list[dict] = Body(..., embed=True),
-    current_user: dict = Depends(get_current_user),
-) -> dict:
-    """Bulk-insert applications. Each item: {external_id, answers, metadata?}."""
-    try:
-        n = DatasetService().upsert_applications(
-            project_id, applications, int(current_user["sub"])
-        )
-    except ValueError as e:
-        if "not found" in str(e).lower():
-            raise HTTPException(status_code=404, detail=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"loaded": n}
 
 
 # ------------------------------------------------------------------ #

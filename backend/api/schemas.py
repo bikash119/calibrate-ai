@@ -200,6 +200,7 @@ class QuestionInput(BaseModel):
     """A question in a dataset save request."""
     key: str                       # operator-defined identifier (e.g. 'q1', 'team')
     text: str
+    type: str = "question"         # 'question' | 'demographic' | 'metadata'
     sort_order: int = 0
 
 
@@ -208,6 +209,7 @@ class QuestionItem(BaseModel):
     id: int
     key: str
     text: str
+    type: str                      # 'question' | 'demographic' | 'metadata'
     sort_order: int
 
 
@@ -244,6 +246,53 @@ class ApplicationsResponse(BaseModel):
     """GET /api/projects/{id}/applications."""
     project_id: int
     applications: list[ApplicationItem]
+
+
+# --- Dataset import wizard ----------------------------------------- #
+# Flow: client uploads file → /dataset/parse returns preview → user
+# picks the question row + tags columns → /dataset/import re-uploads file
+# with mappings and atomically replaces questions + applications.
+
+class ImportSheetInfo(BaseModel):
+    """One sheet in an uploaded XLSX (CSV files emit a single synthetic sheet)."""
+    name: str
+    rows: int                      # excluding header detection — total rows in sheet
+    columns: int
+
+
+class ImportPreviewSheet(BaseModel):
+    """The preview rows for the chosen (or default) sheet."""
+    name: str
+    total_rows: int
+    rows: list[list[str | None]]   # first N rows, all cells stringified, null for empty
+
+
+class ImportPreviewResponse(BaseModel):
+    """POST /api/projects/{id}/dataset/parse."""
+    format: str                    # 'csv' | 'xlsx'
+    sheets: list[ImportSheetInfo]  # for CSV: single synthetic sheet
+    suggested_sheet: str           # default for the picker
+    preview: ImportPreviewSheet    # rows for the suggested sheet
+
+
+class ColumnMapping(BaseModel):
+    """One column → one role assignment."""
+    column_index: int              # 0-based
+    role: str                      # 'id' | 'question' | 'demographic' | 'metadata' | 'exclude'
+
+
+class ImportRequest(BaseModel):
+    """Mappings JSON sent alongside the file in POST /dataset/import."""
+    sheet_name: str | None = None  # required for XLSX, ignored for CSV
+    question_row_index: int        # 0-based row that holds question text
+    data_start_row_index: int      # 0-based first data row (typically question_row_index + 1)
+    column_mappings: list[ColumnMapping]
+
+
+class ImportResponse(BaseModel):
+    """POST /api/projects/{id}/dataset/import."""
+    questions_created: int
+    applications_created: int
 
 
 class HumanScoreItem(BaseModel):

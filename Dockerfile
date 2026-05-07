@@ -1,21 +1,15 @@
-# Multi-stage Dockerfile for Scoring AI application
-# Builds frontend static files and runs FastAPI backend
+# Multi-stage Dockerfile for Calibrate AI.
+# Builds the frontend static bundle, then bakes both halves into one image.
 
 # Stage 1: Build frontend
 FROM node:20-slim AS frontend-builder
 
 WORKDIR /app/frontend
 
-# Copy frontend package files
 COPY frontend/package*.json ./
-
-# Install dependencies
 RUN npm ci
 
-# Copy frontend source
 COPY frontend/ ./
-
-# Build static files
 RUN npm run build
 
 # Stage 2: Python backend
@@ -23,21 +17,19 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install uv for fast dependency management
+# uv for fast dependency management
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Copy Python dependency files
-COPY pyproject.toml uv.lock ./
-
-# Install dependencies
+# Install Python deps first (better cache reuse than copying source first)
+COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --frozen --no-dev
 
-# Copy application code
-COPY *.py ./
-COPY api/ ./api/
-COPY prompts_config.json ./
+# Backend source — flatten into /app so api.main:app resolves the same way
+# at runtime as it does in dev.
+COPY backend/*.py ./
+COPY backend/api/ ./api/
 
-# Copy built frontend from stage 1
+# Built frontend from stage 1; FastAPI serves these at runtime.
 COPY --from=frontend-builder /app/frontend/dist ./static
 
 # Create data directory for SQLite

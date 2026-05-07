@@ -388,6 +388,7 @@ class Question:
     project_id: int = 0
     key: str = ""
     text: str = ""
+    type: str = "question"   # 'question' | 'demographic' | 'metadata'
     sort_order: int = 0
 
 
@@ -420,9 +421,9 @@ class QuestionRepository:
     def create(self, question: Question) -> int:
         with get_db_cursor() as cursor:
             cursor.execute(
-                """INSERT INTO questions (project_id, key, text, sort_order)
-                   VALUES (?, ?, ?, ?)""",
-                (question.project_id, question.key, question.text, question.sort_order),
+                """INSERT INTO questions (project_id, key, text, type, sort_order)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (question.project_id, question.key, question.text, question.type, question.sort_order),
             )
             return cursor.lastrowid
 
@@ -432,9 +433,9 @@ class QuestionRepository:
             cursor.execute("DELETE FROM questions WHERE project_id = ?", (project_id,))
             for q in questions:
                 cursor.execute(
-                    """INSERT INTO questions (project_id, key, text, sort_order)
-                       VALUES (?, ?, ?, ?)""",
-                    (project_id, q.key, q.text, q.sort_order),
+                    """INSERT INTO questions (project_id, key, text, type, sort_order)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (project_id, q.key, q.text, q.type, q.sort_order),
                 )
 
 

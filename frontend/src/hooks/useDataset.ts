@@ -6,19 +6,23 @@ import {
   ApplicationDetailSchema,
   ApplicationsResponseSchema,
   HumanScoresResponseSchema,
+  ImportPreviewResponseSchema,
+  ImportResponseSchema,
   QuestionsResponseSchema,
   type ApplicationDetail,
   type ApplicationsResponse,
   type HumanScoresResponse,
+  type ImportPreviewResponse,
+  type ImportRequest,
+  type ImportResponse,
   type QuestionsResponse,
-  type QuestionInput,
 } from "../schemas";
 
 const LoadResultSchema = z.object({ loaded: z.number() });
 type LoadResult = z.infer<typeof LoadResultSchema>;
 
 // ------------------------------------------------------------------ //
-// Questions                                                          //
+// Questions (read-only — creation flows through the import wizard)   //
 // ------------------------------------------------------------------ //
 
 export function useQuestions(projectId: number | undefined) {
@@ -30,23 +34,8 @@ export function useQuestions(projectId: number | undefined) {
   });
 }
 
-export function useSaveQuestions(projectId: number) {
-  const qc = useQueryClient();
-  return useMutation<QuestionsResponse, Error, QuestionInput[]>({
-    mutationFn: (questions) =>
-      apiFetch(`/projects/${projectId}/questions`, QuestionsResponseSchema, {
-        method: "PUT",
-        body: JSON.stringify({ questions }),
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["questions", projectId] });
-      qc.invalidateQueries({ queryKey: ["rubric", projectId] }); // criteria validate against question keys
-    },
-  });
-}
-
 // ------------------------------------------------------------------ //
-// Applications                                                       //
+// Applications (read-only)                                           //
 // ------------------------------------------------------------------ //
 
 export function useApplications(projectId: number | undefined) {
@@ -58,7 +47,10 @@ export function useApplications(projectId: number | undefined) {
   });
 }
 
-export function useApplication(projectId: number | undefined, applicationId: number | undefined) {
+export function useApplication(
+  projectId: number | undefined,
+  applicationId: number | undefined,
+) {
   return useQuery<ApplicationDetail>({
     queryKey: ["application", projectId, applicationId],
     queryFn: () =>
@@ -70,30 +62,56 @@ export function useApplication(projectId: number | undefined, applicationId: num
   });
 }
 
-interface ApplicationUpload {
-  external_id: string;
-  answers: Record<string, string>;
-  metadata?: Record<string, string> | null;
+// ------------------------------------------------------------------ //
+// Dataset import wizard                                              //
+// ------------------------------------------------------------------ //
+
+/** Parse a CSV/XLSX upload to drive the wizard's preview UI. Stateless;
+ *  the file is not stored server-side. */
+export function useImportPreview(projectId: number) {
+  return useMutation<ImportPreviewResponse, Error, File>({
+    mutationFn: (file) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return apiFetch(
+        `/projects/${projectId}/dataset/parse`,
+        ImportPreviewResponseSchema,
+        { method: "POST", body: fd },
+      );
+    },
+  });
 }
 
-export function useUploadApplications(projectId: number) {
+/** Atomically replace the project's questions + applications. */
+export function useImportDataset(projectId: number) {
   const qc = useQueryClient();
-  return useMutation<LoadResult, Error, ApplicationUpload[]>({
-    mutationFn: (applications) =>
-      apiFetch(`/projects/${projectId}/applications`, LoadResultSchema, {
-        method: "POST",
-        body: JSON.stringify({ applications }),
-      }),
+  return useMutation<
+    ImportResponse,
+    Error,
+    { file: File; mappings: ImportRequest }
+  >({
+    mutationFn: ({ file, mappings }) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("mappings", JSON.stringify(mappings));
+      return apiFetch(
+        `/projects/${projectId}/dataset/import`,
+        ImportResponseSchema,
+        { method: "POST", body: fd },
+      );
+    },
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["questions", projectId] });
       qc.invalidateQueries({ queryKey: ["applications", projectId] });
       qc.invalidateQueries({ queryKey: ["project", projectId] });
       qc.invalidateQueries({ queryKey: ["splits", projectId] });
+      qc.invalidateQueries({ queryKey: ["rubric", projectId] });
     },
   });
 }
 
 // ------------------------------------------------------------------ //
-// Human scores                                                       //
+// Human scores (still has its own JSON/CSV upload card for now)      //
 // ------------------------------------------------------------------ //
 
 export function useHumanScores(projectId: number | undefined) {

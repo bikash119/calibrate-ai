@@ -142,6 +142,13 @@ CREATE TABLE IF NOT EXISTS questions (
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     key TEXT NOT NULL,
     text TEXT NOT NULL,
+    -- 'question' is the LLM's primary substrate. 'demographic' and 'metadata'
+    -- are also stored as keyed answers in applications.answers_json; an operator
+    -- can opt them into a criterion's feeding_question_keys later.
+    -- The ID column from a CSV upload doesn't become a row here — it lands in
+    -- applications.external_id.
+    type TEXT NOT NULL DEFAULT 'question'
+        CHECK(type IN ('question', 'demographic', 'metadata')),
     sort_order INTEGER NOT NULL DEFAULT 0,
     UNIQUE(project_id, key)
 );

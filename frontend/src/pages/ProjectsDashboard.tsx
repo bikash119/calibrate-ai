@@ -144,6 +144,7 @@ export function ProjectsDashboard() {
       {showCreate && (
         <CreateProjectModal
           programs={programs.data?.programs ?? []}
+          programsLoading={programs.isLoading}
           onClose={() => setShowCreate(false)}
           onCreate={async (body) => {
             const project = await createProject.mutateAsync(body);
@@ -188,12 +189,14 @@ function activeProjectsCount(
 
 function CreateProjectModal({
   programs,
+  programsLoading,
   onClose,
   onCreate,
   submitting,
   error,
 }: {
   programs: { id: number; name: string }[];
+  programsLoading: boolean;
   onClose: () => void;
   onCreate: (body: {
     program_id: number;
@@ -207,9 +210,18 @@ function CreateProjectModal({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [language, setLanguage] = useState("en");
-  const [programId, setProgramId] = useState<number | "">(programs[0]?.id ?? "");
+  // User-picked id (or null if untouched). Effective id falls back to the first
+  // program — recomputed on every render so the modal works even if programs
+  // load AFTER it opened.
+  const [pickedProgramId, setPickedProgramId] = useState<number | null>(null);
+  const effectiveProgramId =
+    pickedProgramId !== null
+      ? pickedProgramId
+      : programs[0]?.id ?? null;
 
-  const canSubmit = name.trim().length > 0 && typeof programId === "number";
+  const noPrograms = !programsLoading && programs.length === 0;
+  const canSubmit =
+    name.trim().length > 0 && effectiveProgramId !== null && !noPrograms;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
@@ -222,17 +234,28 @@ function CreateProjectModal({
         </div>
         <div className="px-5 py-4 grid gap-3">
           <Field label="Program">
-            <select
-              value={programId}
-              onChange={(e) => setProgramId(Number(e.target.value))}
-              className="w-full px-3 py-2 rounded-[var(--radius-sm)] bg-[var(--bg)] border border-[var(--border)] text-sm"
-            >
-              {programs.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+            {programsLoading ? (
+              <div className="text-sm text-[var(--fg-muted)] px-3 py-2">
+                Loading programs…
+              </div>
+            ) : noPrograms ? (
+              <div className="px-3 py-2 rounded-[var(--radius-sm)] text-xs bg-[var(--yellow-bg)] border border-[var(--yellow-border)] text-[var(--yellow-fg)]">
+                No programs found. Run <code>uv run python db_seed.py</code> to seed
+                the default program, or create one on the Programs page.
+              </div>
+            ) : (
+              <select
+                value={effectiveProgramId ?? ""}
+                onChange={(e) => setPickedProgramId(Number(e.target.value))}
+                className="w-full px-3 py-2 rounded-[var(--radius-sm)] bg-[var(--bg)] border border-[var(--border)] text-sm"
+              >
+                {programs.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            )}
           </Field>
           <Field label="Name">
             <input
@@ -274,7 +297,7 @@ function CreateProjectModal({
             disabled={!canSubmit || submitting}
             onClick={() =>
               onCreate({
-                program_id: programId as number,
+                program_id: effectiveProgramId as number,
                 name: name.trim(),
                 description: description.trim() || null,
                 language: language.trim() || null,

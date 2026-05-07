@@ -211,10 +211,17 @@ class ProjectService:
             created_by=user_id,
         ))
 
-        # Copy questions (key is the stable identifier).
+        # Copy questions (key is the stable identifier; preserve type so
+        # demographic/metadata tags carry over).
         old_questions = self.question_repo.get_by_project(source_id)
         self.question_repo.replace_all(new_id, [
-            Question(project_id=new_id, key=q.key, text=q.text, sort_order=q.sort_order)
+            Question(
+                project_id=new_id,
+                key=q.key,
+                text=q.text,
+                type=q.type,
+                sort_order=q.sort_order,
+            )
             for q in old_questions
         ])
 

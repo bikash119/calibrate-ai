@@ -59,8 +59,8 @@ export function AppShell() {
       <aside className="sidebar">
         {/* Brand */}
         <div className="brand">
-          <div className="brand-mark">SA</div>
-          <span>Scoring AI</span>
+          <div className="brand-mark">CA</div>
+          <span>Calibrate AI</span>
           <button
             className="btn btn-ghost btn-sm"
             style={{ marginLeft: "auto", padding: 2 }}

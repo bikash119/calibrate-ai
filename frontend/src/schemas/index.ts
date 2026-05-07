@@ -182,27 +182,68 @@ export type RubricSaveRequest = z.infer<typeof RubricSaveRequestSchema>;
 // Dataset: questions, applications, human scores
 // ============================================================
 
+export const QuestionTypeSchema = z.enum(["question", "demographic", "metadata"]);
 export const QuestionItemSchema = z.object({
   id: z.number(),
   key: z.string(),
   text: z.string(),
+  type: QuestionTypeSchema,
   sort_order: z.number(),
 });
 export const QuestionsResponseSchema = z.object({
   project_id: z.number(),
   questions: z.array(QuestionItemSchema),
 });
-export const QuestionInputSchema = z.object({
-  key: z.string(),
-  text: z.string(),
-  sort_order: z.number().default(0),
-});
-export const QuestionsSaveRequestSchema = z.object({
-  questions: z.array(QuestionInputSchema),
-});
+export type QuestionType = z.infer<typeof QuestionTypeSchema>;
 export type QuestionItem = z.infer<typeof QuestionItemSchema>;
 export type QuestionsResponse = z.infer<typeof QuestionsResponseSchema>;
-export type QuestionInput = z.infer<typeof QuestionInputSchema>;
+
+// --- Dataset import wizard ---------------------------------------- //
+
+export const ColumnRoleSchema = z.enum([
+  "id",
+  "question",
+  "demographic",
+  "metadata",
+  "exclude",
+]);
+export const ImportSheetInfoSchema = z.object({
+  name: z.string(),
+  rows: z.number(),
+  columns: z.number(),
+});
+export const ImportPreviewSheetSchema = z.object({
+  name: z.string(),
+  total_rows: z.number(),
+  rows: z.array(z.array(z.string().nullable())),
+});
+export const ImportPreviewResponseSchema = z.object({
+  format: z.enum(["csv", "xlsx"]),
+  sheets: z.array(ImportSheetInfoSchema),
+  suggested_sheet: z.string(),
+  preview: ImportPreviewSheetSchema,
+});
+export const ColumnMappingSchema = z.object({
+  column_index: z.number(),
+  role: ColumnRoleSchema,
+});
+export const ImportRequestSchema = z.object({
+  sheet_name: z.string().nullable().optional(),
+  question_row_index: z.number(),
+  data_start_row_index: z.number(),
+  column_mappings: z.array(ColumnMappingSchema),
+});
+export const ImportResponseSchema = z.object({
+  questions_created: z.number(),
+  applications_created: z.number(),
+});
+export type ColumnRole = z.infer<typeof ColumnRoleSchema>;
+export type ImportSheetInfo = z.infer<typeof ImportSheetInfoSchema>;
+export type ImportPreviewSheet = z.infer<typeof ImportPreviewSheetSchema>;
+export type ImportPreviewResponse = z.infer<typeof ImportPreviewResponseSchema>;
+export type ColumnMapping = z.infer<typeof ColumnMappingSchema>;
+export type ImportRequest = z.infer<typeof ImportRequestSchema>;
+export type ImportResponse = z.infer<typeof ImportResponseSchema>;
 
 export const ApplicationItemSchema = z.object({
   id: z.number(),

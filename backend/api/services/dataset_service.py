@@ -9,7 +9,6 @@ import json
 import logging
 
 from db_models import (
-    Application,
     ApplicationRepository,
     AuditLogRepository,
     CriteriaRepository,
@@ -42,39 +41,6 @@ class DatasetService:
         if not self.project_repo.get_by_id(project_id):
             raise ValueError(f"Project {project_id} not found")
         return self.question_repo.get_by_project(project_id)
-
-    def save_questions(
-        self,
-        project_id: int,
-        questions: list[dict],
-        user_id: int,
-    ) -> None:
-        if not self.project_repo.get_by_id(project_id):
-            raise ValueError(f"Project {project_id} not found")
-        keys = [q["key"] for q in questions]
-        if len(set(keys)) != len(keys):
-            raise ValueError("Question keys must be unique within a project")
-        for q in questions:
-            if not q["key"] or not q["key"].strip():
-                raise ValueError("Question key cannot be blank")
-            if not q["text"] or not q["text"].strip():
-                raise ValueError(f"Question '{q['key']}' has no text")
-
-        rows = [
-            Question(
-                project_id=project_id,
-                key=q["key"],
-                text=q["text"],
-                sort_order=q.get("sort_order", i),
-            )
-            for i, q in enumerate(questions)
-        ]
-        self.question_repo.replace_all(project_id, rows)
-        self.audit.log("project", project_id, "questions_saved", user_id=user_id, details={
-            "question_count": len(rows),
-        })
-        logger.info("Saved %d questions for project %d (user %d)",
-                    len(rows), project_id, user_id)
 
     # ------------------------------------------------------------------ #
     # Applications                                                       #
@@ -114,50 +80,8 @@ class DatasetService:
             "created_at": app.created_at,
         }
 
-    def upsert_applications(
-        self,
-        project_id: int,
-        applications: list[dict],
-        user_id: int,
-    ) -> int:
-        """Bulk-insert applications. Each input has external_id, answers (dict), optional metadata."""
-        if not self.project_repo.get_by_id(project_id):
-            raise ValueError(f"Project {project_id} not found")
-        if not applications:
-            raise ValueError("Cannot upsert an empty application list")
-
-        valid_keys = {q.key for q in self.question_repo.get_by_project(project_id)}
-        if not valid_keys:
-            raise ValueError(
-                "Project has no questions defined yet. Save questions before uploading applications."
-            )
-
-        rows: list[Application] = []
-        for a in applications:
-            if not a.get("external_id"):
-                raise ValueError("Application is missing external_id")
-            answers = a.get("answers") or {}
-            if not isinstance(answers, dict):
-                raise ValueError(f"Application '{a['external_id']}' answers must be a dict")
-            unknown = set(answers.keys()) - valid_keys
-            if unknown:
-                raise ValueError(
-                    f"Application '{a['external_id']}' has answers for unknown question keys: {sorted(unknown)}"
-                )
-            rows.append(Application(
-                project_id=project_id,
-                external_id=a["external_id"],
-                answers_json=json.dumps(answers, ensure_ascii=False),
-                metadata_json=json.dumps(a["metadata"], ensure_ascii=False) if a.get("metadata") else None,
-            ))
-
-        ids = self.app_repo.bulk_create(rows)
-        self.audit.log("project", project_id, "applications_loaded", user_id=user_id, details={
-            "application_count": len(ids),
-        })
-        logger.info("Loaded %d applications for project %d (user %d)",
-                    len(ids), project_id, user_id)
-        return len(ids)
+    # Application creation flows through the import wizard
+    # (`api/services/import_service.py`). This service exposes only reads.
 
     # ------------------------------------------------------------------ #
     # Human scores                                                       #

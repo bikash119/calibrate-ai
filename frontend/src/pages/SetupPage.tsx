@@ -3,9 +3,8 @@ import { ArrowRight } from "lucide-react";
 
 import { Banner } from "../components/ui/Banner";
 import { PageHead } from "../components/ui/PageHead";
-import { ApplicationsCard } from "../features/setup/ApplicationsCard";
+import { DatasetCard } from "../features/setup/DatasetCard";
 import { HumanScoresCard } from "../features/setup/HumanScoresCard";
-import { QuestionsCard } from "../features/setup/QuestionsCard";
 import { RubricCard } from "../features/setup/RubricCard";
 import { SplitsCard } from "../features/setup/SplitsCard";
 import { useProject } from "../hooks/useProjects";
@@ -95,9 +94,8 @@ export function SetupPage() {
       )}
 
       <div className="grid gap-4 my-4">
-        <QuestionsCard projectId={projectId} disabled={isPastSetup} />
+        <DatasetCard projectId={projectId} disabled={isPastSetup} />
         <RubricCard projectId={projectId} disabled={isPastSetup} />
-        <ApplicationsCard projectId={projectId} disabled={isPastSetup} />
         <HumanScoresCard projectId={projectId} disabled={isPastSetup} />
         <SplitsCard projectId={projectId} disabled={isPastSetup} />
       </div>

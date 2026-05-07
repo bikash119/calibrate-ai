@@ -31,10 +31,35 @@ def test_full_calibration_loop(client, auth_headers, stub_llm):
         "program_id": 1, "name": "smoke", "language": "en",
     }).json()["id"]
 
-    # 2. Questions + rubric
-    client.put(f"/api/projects/{pid}/questions", headers=H, json={
-        "questions": [{"key": "q1", "text": "Tell us", "sort_order": 0}],
-    })
+    # 2. Questions + applications come from one CSV upload (the new import flow).
+    # The CSV's first column is the ID, second is the question. Auto-generated
+    # question key will be q1.
+    import json as _json
+    csv_lines = ["id,Tell us"]
+    for i in range(12):
+        csv_lines.append(f"a{i:02d},Team text EXPECTED_SCORE: {(i % 5) + 1}")
+    csv_bytes = ("\n".join(csv_lines) + "\n").encode("utf-8")
+
+    r = client.post(
+        f"/api/projects/{pid}/dataset/import",
+        headers=H,
+        files={"file": ("smoke.csv", csv_bytes, "text/csv")},
+        data={
+            "mappings": _json.dumps({
+                "sheet_name": None,
+                "question_row_index": 0,
+                "data_start_row_index": 1,
+                "column_mappings": [
+                    {"column_index": 0, "role": "id"},
+                    {"column_index": 1, "role": "question"},
+                ],
+            }),
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert r.json() == {"questions_created": 1, "applications_created": 12}
+
+    # 3. Rubric (references the auto-generated question key 'q1')
     client.put(f"/api/projects/{pid}/rubric", headers=H, json={
         "criteria": [{
             "name": "team", "description": "Strong team",
@@ -45,13 +70,6 @@ def test_full_calibration_loop(client, auth_headers, stub_llm):
             "sort_order": 0,
         }],
     })
-
-    # 3. Applications + human scores (12 apps, 2 evaluators each)
-    apps = [
-        {"external_id": f"a{i:02d}", "answers": {"q1": f"Team text EXPECTED_SCORE: {(i % 5) + 1}"}}
-        for i in range(12)
-    ]
-    client.post(f"/api/projects/{pid}/applications", headers=H, json={"applications": apps})
 
     scores = []
     for i in range(12):

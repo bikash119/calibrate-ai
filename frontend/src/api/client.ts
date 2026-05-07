@@ -32,10 +32,17 @@ export async function apiFetch<T>(
   schema: z.ZodSchema<T> | null,
   options: RequestInit = {},
 ): Promise<T> {
+  // For multipart uploads, the browser must set Content-Type itself (with the
+  // boundary). Detect FormData and skip the JSON content-type in that case.
+  const isFormData =
+    typeof FormData !== "undefined" && options.body instanceof FormData;
+  const baseHeaders: Record<string, string> = isFormData
+    ? {}
+    : { "Content-Type": "application/json" };
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: {
-      "Content-Type": "application/json",
+      ...baseHeaders,
       ...getAuthHeaders(),
       ...(options.headers ?? {}),
     },
