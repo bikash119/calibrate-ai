@@ -191,6 +191,18 @@ class RubricResponse(BaseModel):
     criteria: list[CriterionItem]
 
 
+class RubricExtractTextRequest(BaseModel):
+    """POST /api/projects/{id}/rubric/extract — text body path."""
+    text: str
+
+
+class RubricExtractResponse(BaseModel):
+    """Either /extract endpoint returns this. The UI uses the returned
+    `criteria` to seed its inline rubric editor, then the operator reviews
+    and saves via PUT /rubric."""
+    criteria: list[CriterionInput]
+
+
 # ============================================================
 # Dataset: questions, applications, human scores
 # ============================================================

@@ -108,15 +108,14 @@ def stub_llm(monkeypatch: pytest.MonkeyPatch, seeded_db: Path) -> StubLLM:
 
 @pytest.fixture
 def client(seeded_db: Path) -> Any:
-    """TestClient with a fresh app instance. Importing api.main inside the
-    fixture ensures init_db runs against the test database."""
-    # api.main imports modules at module-level; we want a fresh import per test
-    # to avoid sharing state across runs.
-    import sys
-    for mod in list(sys.modules):
-        if mod.startswith("api."):
-            del sys.modules[mod]
+    """TestClient over the cached api.main app. Per-test schema isolation is
+    handled by seeded_db (which calls init_db(db_path) on the fresh temp file
+    AND sets SCORING_DB_PATH so every subsequent connection routes there).
 
+    We deliberately do NOT clear `api.*` from sys.modules — doing so leaves
+    earlier tests' module-level class references bound to orphaned modules,
+    which breaks LLM-stub patches via `monkeypatch.setattr(mod, ...)`.
+    """
     from fastapi.testclient import TestClient
     from api.main import app
     return TestClient(app)

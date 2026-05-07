@@ -1,9 +1,23 @@
 import { useEffect, useMemo, useState } from "react";   // useEffect kept for CriterionEditor's anchor pruning
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  Edit2,
+  ListChecks,
+  Pencil,
+  Plus,
+  Sparkles,
+  Trash2,
+  Upload,
+} from "lucide-react";
 
+import { Banner } from "../../components/ui/Banner";
 import { Card } from "../../components/ui/Card";
 import { useQuestions } from "../../hooks/useDataset";
-import { useRubric, useSaveRubric } from "../../hooks/useRubric";
+import {
+  useExtractRubricFile,
+  useExtractRubricText,
+  useRubric,
+  useSaveRubric,
+} from "../../hooks/useRubric";
 import type { CriterionInput, CriterionItem, QuestionItem } from "../../schemas";
 
 interface Props {
@@ -11,21 +25,60 @@ interface Props {
   disabled?: boolean;
 }
 
+type EditMode = "file" | "paste" | "manual";
+
 export function RubricCard({ projectId, disabled }: Props) {
   const rubric = useRubric(projectId);
   const questions = useQuestions(projectId);
   const save = useSaveRubric(projectId);
+  const extractText = useExtractRubricText(projectId);
+  const extractFile = useExtractRubricFile(projectId);
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<CriterionInput[]>([]);
+  const [mode, setMode] = useState<EditMode>("manual");
+  const [extractedCount, setExtractedCount] = useState(0);
 
   const startEdit = () => {
-    setDraft(rubric.data ? rubric.data.criteria.map(toInput) : []);
+    const existing = rubric.data ? rubric.data.criteria.map(toInput) : [];
+    setDraft(existing);
+    // First-time edits start in upload mode; subsequent edits start in manual.
+    setMode(existing.length > 0 ? "manual" : "file");
+    setExtractedCount(0);
+    extractText.reset();
+    extractFile.reset();
     setEditing(true);
   };
   const cancel = () => {
     setEditing(false);
+    setExtractedCount(0);
     save.reset();
+    extractText.reset();
+    extractFile.reset();
+  };
+
+  const acceptExtraction = (criteria: CriterionInput[]) => {
+    setDraft(criteria);
+    setExtractedCount(criteria.length);
+    setMode("manual");
+  };
+
+  const handlePasteExtract = async (text: string) => {
+    try {
+      const r = await extractText.mutateAsync(text);
+      acceptExtraction(r.criteria);
+    } catch {
+      /* surfaced inline */
+    }
+  };
+
+  const handleFileExtract = async (file: File) => {
+    try {
+      const r = await extractFile.mutateAsync(file);
+      acceptExtraction(r.criteria);
+    } catch {
+      /* surfaced inline */
+    }
   };
 
   const handleSave = async () => {
@@ -104,23 +157,58 @@ export function RubricCard({ projectId, disabled }: Props) {
 
       {editing && (
         <div className="grid gap-3">
+          {/* Mode tab strip — only while draft is empty. Once criteria exist
+              (extracted or manually added), the form is the only thing that
+              makes sense, and switching modes would silently discard work. */}
+          {draft.length === 0 && <ModeTabs current={mode} onChange={setMode} />}
+
           {(questions.data?.questions.length ?? 0) === 0 && (
             <div className="px-3 py-2 rounded-[var(--radius-sm)] text-xs bg-[var(--yellow-bg)] border border-[var(--yellow-border)] text-[var(--yellow-fg)]">
               Add questions first — criteria reference question keys.
             </div>
           )}
-          {draft.map((c, i) => (
-            <CriterionEditor
-              key={i}
-              criterion={c}
-              questions={questions.data?.questions ?? []}
-              onChange={(patch) => update(i, patch)}
-              onRemove={() => remove(i)}
+
+          {mode === "file" && draft.length === 0 && (
+            <RubricFileMode
+              onPick={handleFileExtract}
+              loading={extractFile.isPending}
+              error={extractFile.error?.message ?? null}
             />
-          ))}
-          <button className="btn btn-sm self-start" onClick={add}>
-            <Plus className="w-3 h-3" /> Add criterion
-          </button>
+          )}
+
+          {mode === "paste" && draft.length === 0 && (
+            <RubricPasteMode
+              onExtract={handlePasteExtract}
+              loading={extractText.isPending}
+              error={extractText.error?.message ?? null}
+            />
+          )}
+
+          {/* If extraction populated draft, OR mode is manual, OR draft already has data,
+              show the structured form. */}
+          {(mode === "manual" || draft.length > 0) && (
+            <>
+              {extractedCount > 0 && (
+                <Banner kind="success" title={`Extracted ${extractedCount} criteria`}>
+                  Review the structured form below — this is what the LLM will see
+                  during scoring. Edit anything that looks off, then Save.
+                </Banner>
+              )}
+              {draft.map((c, i) => (
+                <CriterionEditor
+                  key={i}
+                  criterion={c}
+                  questions={questions.data?.questions ?? []}
+                  onChange={(patch) => update(i, patch)}
+                  onRemove={() => remove(i)}
+                />
+              ))}
+              <button className="btn btn-sm self-start" onClick={add}>
+                <Plus className="w-3 h-3" /> Add criterion
+              </button>
+            </>
+          )}
+
           {save.error && (
             <div className="px-3 py-2 rounded-[var(--radius-sm)] text-xs bg-[var(--red-bg)] border border-[var(--red-border)] text-[var(--red-fg)]">
               {save.error.message}
@@ -376,4 +464,163 @@ function toInput(c: CriterionItem): CriterionInput {
     weighted_question_keys: [...c.weighted_question_keys],
     sort_order: c.sort_order,
   };
+}
+
+// ------------------------------------------------------------------ //
+// Edit-mode tabs                                                     //
+// ------------------------------------------------------------------ //
+
+function ModeTabs({
+  current,
+  onChange,
+}: {
+  current: EditMode;
+  onChange: (m: EditMode) => void;
+}) {
+  const tabs: { id: EditMode; label: string; icon: React.ReactNode }[] = [
+    { id: "file", label: "Upload file", icon: <Upload className="w-3 h-3" /> },
+    { id: "paste", label: "Paste text", icon: <Edit2 className="w-3 h-3" /> },
+    { id: "manual", label: "Manual entry", icon: <ListChecks className="w-3 h-3" /> },
+  ];
+  return (
+    <div
+      className="inline-flex items-center gap-1 p-1 rounded-[var(--radius-sm)]"
+      style={{ background: "var(--bg-sunken)" }}
+    >
+      {tabs.map((t) => {
+        const active = current === t.id;
+        return (
+          <button
+            key={t.id}
+            onClick={() => onChange(t.id)}
+            className={`btn btn-sm ${active ? "" : "btn-ghost"}`}
+            style={
+              active
+                ? {
+                    background: "var(--bg-elevated)",
+                    boxShadow: "var(--shadow-sm)",
+                  }
+                : { background: "transparent", border: "none" }
+            }
+          >
+            {t.icon} {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ //
+// File upload mode                                                   //
+// ------------------------------------------------------------------ //
+
+function RubricFileMode({
+  onPick,
+  loading,
+  error,
+}: {
+  onPick: (file: File) => void;
+  loading: boolean;
+  error: string | null;
+}) {
+  const [dragging, setDragging] = useState(false);
+  return (
+    <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget === e.target) setDragging(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        const f = e.dataTransfer.files?.[0];
+        if (f) onPick(f);
+      }}
+      className={`px-4 py-7 rounded-[var(--radius-sm)] border-2 border-dashed text-center transition-colors ${
+        dragging
+          ? "border-[var(--accent)] bg-[var(--accent-bg)]"
+          : "border-[var(--border)] bg-[var(--bg-sunken)]"
+      }`}
+    >
+      <Upload className="w-5 h-5 text-[var(--fg-faint)] mx-auto mb-2" />
+      <div className="text-sm font-medium mb-1">
+        Drop a rubric file here, or click to browse
+      </div>
+      <div className="text-xs text-[var(--fg-muted)] mb-3">
+        .txt, .md, .docx · max 10 MB · PDF support coming later
+      </div>
+      <label className="btn btn-sm inline-flex">
+        <input
+          type="file"
+          accept=".txt,.md,.docx"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onPick(f);
+            e.target.value = "";
+          }}
+        />
+        Choose file
+      </label>
+      {loading && (
+        <div className="text-xs text-[var(--fg-muted)] mt-3">
+          Extracting structured form…
+        </div>
+      )}
+      {error && (
+        <div className="mt-3 px-3 py-2 rounded-[var(--radius-sm)] text-xs bg-[var(--red-bg)] border border-[var(--red-border)] text-[var(--red-fg)]">
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ //
+// Paste-text mode                                                    //
+// ------------------------------------------------------------------ //
+
+function RubricPasteMode({
+  onExtract,
+  loading,
+  error,
+}: {
+  onExtract: (text: string) => void;
+  loading: boolean;
+  error: string | null;
+}) {
+  const [text, setText] = useState("");
+  return (
+    <div className="grid gap-2">
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={8}
+        placeholder="Paste rubric text here — criteria, scales, anchor descriptions, anything that defines what 'good' looks like for each dimension."
+        className="w-full px-3 py-2 rounded-[var(--radius-sm)] bg-[var(--bg)] border border-[var(--border)] text-sm focus:outline-none focus:border-[var(--accent)]"
+      />
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-[var(--fg-faint)] [font-variant-numeric:tabular-nums]">
+          {text.length} chars
+        </span>
+        <button
+          className="btn btn-primary btn-sm"
+          disabled={!text.trim() || loading}
+          onClick={() => onExtract(text)}
+        >
+          <Sparkles className="w-3 h-3" />
+          {loading ? "Extracting…" : "Extract structured form"}
+        </button>
+      </div>
+      {error && (
+        <div className="px-3 py-2 rounded-[var(--radius-sm)] text-xs bg-[var(--red-bg)] border border-[var(--red-border)] text-[var(--red-fg)]">
+          {error}
+        </div>
+      )}
+    </div>
+  );
 }

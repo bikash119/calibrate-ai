@@ -173,10 +173,15 @@ export const CriterionInputSchema = z.object({
 export const RubricSaveRequestSchema = z.object({
   criteria: z.array(CriterionInputSchema),
 });
+export const RubricExtractTextRequestSchema = z.object({ text: z.string() });
+export const RubricExtractResponseSchema = z.object({
+  criteria: z.array(CriterionInputSchema),
+});
 export type CriterionItem = z.infer<typeof CriterionItemSchema>;
 export type RubricResponse = z.infer<typeof RubricResponseSchema>;
 export type CriterionInput = z.infer<typeof CriterionInputSchema>;
 export type RubricSaveRequest = z.infer<typeof RubricSaveRequestSchema>;
+export type RubricExtractResponse = z.infer<typeof RubricExtractResponseSchema>;
 
 // ============================================================
 // Dataset: questions, applications, human scores
