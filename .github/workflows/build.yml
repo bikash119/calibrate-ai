@@ -1,0 +1,62 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel any in-progress runs on the same ref when a new push lands. PRs that
+# get force-pushed don't need to keep running their stale builds.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv (with cache)
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync dependencies (incl. dev)
+        run: uv sync --frozen --group dev
+
+      - name: Run pytest
+        run: uv run pytest
+
+  frontend:
+    name: Frontend (build + tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build (tsc + vite)
+        run: npm run build
+
+      - name: Run vitest
+        run: npm test

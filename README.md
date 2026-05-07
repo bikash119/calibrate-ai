@@ -1,5 +1,7 @@
 # Calibrate AI
 
+[![build](https://github.com/bikash119/calibrate-ai/actions/workflows/build.yml/badge.svg)](https://github.com/bikash119/calibrate-ai/actions/workflows/build.yml)
+
 **Calibrate LLMs to score like your human evaluators do.** Self-hosted, open source.
 
 Most "LLM scoring" tools just have an LLM evaluate something against a rubric and call it done. The result usually doesn't match how your actual evaluators score — and you have no way to measure the gap, let alone close it. Calibrate AI is built around that gap.
