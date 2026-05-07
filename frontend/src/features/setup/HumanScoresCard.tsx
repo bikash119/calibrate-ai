@@ -1,0 +1,119 @@
+import { useState } from "react";
+import { Upload } from "lucide-react";
+
+import { Card } from "../../components/ui/Card";
+import { useHumanScores, useUploadHumanScores } from "../../hooks/useDataset";
+import { BulkUploadModal } from "./BulkUploadModal";
+
+interface Props {
+  projectId: number;
+  disabled?: boolean;
+}
+
+interface HumanScoreUpload {
+  external_id: string;
+  criterion_name: string;
+  evaluator_id: string;
+  score: number;
+}
+
+const REQUIRED_COLS = ["external_id", "criterion_name", "evaluator_id", "score"];
+
+function parseCsvRow(row: Record<string, string>, headers: string[]): HumanScoreUpload {
+  for (const c of REQUIRED_COLS) {
+    if (!headers.includes(c)) {
+      throw new Error(`missing required column '${c}'`);
+    }
+  }
+  const score = Number(row.score);
+  if (!Number.isFinite(score) || !Number.isInteger(score)) {
+    throw new Error(`score must be an integer, got '${row.score}'`);
+  }
+  if (!row.external_id) throw new Error("external_id is empty");
+  if (!row.criterion_name) throw new Error("criterion_name is empty");
+  if (!row.evaluator_id) throw new Error("evaluator_id is empty");
+  return {
+    external_id: row.external_id,
+    criterion_name: row.criterion_name,
+    evaluator_id: row.evaluator_id,
+    score,
+  };
+}
+
+export function HumanScoresCard({ projectId, disabled }: Props) {
+  const scores = useHumanScores(projectId);
+  const upload = useUploadHumanScores(projectId);
+  const [showUpload, setShowUpload] = useState(false);
+
+  const total = scores.data?.scores.length ?? 0;
+  const evaluators = new Set(scores.data?.scores.map((s) => s.evaluator_id) ?? []);
+
+  const action = !disabled && (
+    <button className="btn btn-sm" onClick={() => setShowUpload(true)}>
+      <Upload className="w-3 h-3" /> Upload
+    </button>
+  );
+
+  return (
+    <>
+      <Card
+        title="Human scores"
+        desc="Per-evaluator ground-truth scores. The system computes medians automatically."
+        action={action}
+      >
+        {scores.isLoading ? (
+          <div className="text-sm text-[var(--fg-muted)]">Loading…</div>
+        ) : total === 0 ? (
+          <div className="text-sm text-[var(--fg-muted)]">
+            No scores yet. Upload at least 2 evaluators per (app, criterion) for the H-H baseline to be meaningful.
+          </div>
+        ) : (
+          <div className="text-sm">
+            <span className="font-semibold [font-variant-numeric:tabular-nums]">{total}</span>{" "}
+            scores from{" "}
+            <span className="font-semibold [font-variant-numeric:tabular-nums]">{evaluators.size}</span>{" "}
+            evaluator{evaluators.size === 1 ? "" : "s"}.
+          </div>
+        )}
+      </Card>
+
+      {showUpload && (
+        <BulkUploadModal<HumanScoreUpload>
+          title="Upload human scores"
+          desc="One row per (evaluator, application, criterion). Score must be an integer within the criterion's scale."
+          csvSchemaSpec={`Required columns (in any order):
+  external_id      — application identifier
+  criterion_name   — must match a criterion.name from the rubric
+  evaluator_id     — any stable string per evaluator
+  score            — integer in [scale_min, scale_max]`}
+          csvExample={`external_id,criterion_name,evaluator_id,score
+app-001,team,alice,4
+app-001,team,bob,5
+app-001,market,alice,3
+app-001,market,bob,4`}
+          jsonSchemaSpec={`Array<{
+  external_id: string,
+  criterion_name: string,
+  evaluator_id: string,
+  score: number
+}>`}
+          jsonExample={`[
+  { "external_id": "app-001", "criterion_name": "team",   "evaluator_id": "alice", "score": 4 },
+  { "external_id": "app-001", "criterion_name": "team",   "evaluator_id": "bob",   "score": 5 }
+]`}
+          parseCsvRow={parseCsvRow}
+          onClose={() => {
+            setShowUpload(false);
+            upload.reset();
+          }}
+          onSubmit={async (parsed) => {
+            await upload.mutateAsync(parsed);
+            setShowUpload(false);
+          }}
+          submitting={upload.isPending}
+          error={upload.error?.message ?? null}
+        />
+      )}
+    </>
+  );
+}

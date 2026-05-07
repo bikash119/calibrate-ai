@@ -1,0 +1,21 @@
+services:
+  calibrate-ai:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist SQLite database
+      - ./data:/data
+    environment:
+      - SCORING_DB_PATH=/data/scoring.db
+      # LLM API keys - set these in .env file or environment
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      # GCP settings (only needed for Vertex AI batch scoring)
+      - GCP_PROJECT=${GCP_PROJECT:-}
+      - GCP_LOCATION=${GCP_LOCATION:-}
+      - GCS_BATCH_BUCKET=${GCS_BATCH_BUCKET:-}
+      # JWT secret for authentication - change in production!
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+    restart: unless-stopped
