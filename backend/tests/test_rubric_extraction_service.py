@@ -34,7 +34,7 @@ def patch_llm(monkeypatch: pytest.MonkeyPatch):
     def install(response: str) -> _ScriptedLLM:
         client = _ScriptedLLM(response)
         import api.services.rubric_extraction_service as mod
-        monkeypatch.setattr(mod, "get_llm_client", lambda: client)
+        monkeypatch.setattr(mod, "get_llm_client", lambda *a, **kw: client)
         return client
     return install
 

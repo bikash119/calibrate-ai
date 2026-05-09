@@ -86,7 +86,7 @@ def stub_llm(monkeypatch: pytest.MonkeyPatch, seeded_db: Path) -> StubLLM:
     import llm_client
 
     stub = StubLLM()
-    monkeypatch.setattr(llm_client, "get_llm_client", lambda: stub)
+    monkeypatch.setattr(llm_client, "get_llm_client", lambda *a, **kw: stub)
 
     for module_name in (
         "api.services.scoring_job_service",
@@ -94,7 +94,9 @@ def stub_llm(monkeypatch: pytest.MonkeyPatch, seeded_db: Path) -> StubLLM:
     ):
         try:
             mod = importlib.import_module(module_name)
-            monkeypatch.setattr(mod, "get_llm_client", lambda: stub, raising=False)
+            monkeypatch.setattr(
+                mod, "get_llm_client", lambda *a, **kw: stub, raising=False,
+            )
         except ImportError:
             pass
 

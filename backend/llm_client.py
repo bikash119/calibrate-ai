@@ -472,24 +472,46 @@ class GeminiClient(LLMClient):
         raise last_error  # should not reach here
 
 
-def get_llm_client(provider: str | None = None) -> LLMClient:
+# Single source of truth for provider/model defaults. Both the factory and
+# scoring_job_service consume these so the recorded `scoring_jobs.provider`
+# / `scoring_jobs.model` match what the worker actually calls. When a
+# scoring job specifies a model explicitly, it overrides these.
+DEFAULT_PROVIDER = "claude"
+DEFAULT_MODELS: dict[str, str] = {
+    "claude": "claude-haiku-4-5",
+    "gemini": "gemini-2.0-flash-lite",
+}
+
+
+def default_model_for(provider: str) -> str:
+    """Default scoring model per provider — used when a caller / job
+    didn't pin a specific model. Picks the cheap model on each provider
+    since most calls are batch scoring."""
+    return DEFAULT_MODELS.get(provider.lower(), DEFAULT_MODELS[DEFAULT_PROVIDER])
+
+
+def get_llm_client(
+    provider: str | None = None,
+    model: str | None = None,
+) -> LLMClient:
     """
     Factory function to get the appropriate LLM client.
 
     Args:
-        provider: 'claude' or 'gemini' (defaults to LLM_PROVIDER env var or 'claude')
+        provider: 'claude' or 'gemini' (defaults to LLM_PROVIDER env var or DEFAULT_PROVIDER)
+        model: specific model name. When None, falls back to default_model_for(provider).
 
     Returns:
-        LLMClient instance
+        LLMClient instance pinned to (provider, model).
     """
-    provider = provider or os.environ.get("LLM_PROVIDER", "gemini")
-    provider = provider.lower()
-    logger.info("Creating LLM client: provider=%s", provider)
+    provider = (provider or os.environ.get("LLM_PROVIDER", DEFAULT_PROVIDER)).lower()
+    chosen_model = model or default_model_for(provider)
+    logger.info("Creating LLM client: provider=%s model=%s", provider, chosen_model)
 
     if provider == "claude":
-        return ClaudeClient()
+        return ClaudeClient(model=chosen_model)
     elif provider == "gemini":
-        return GeminiClient()
+        return GeminiClient(model=chosen_model)
     else:
         raise ValueError(f"Unknown LLM provider: {provider}. Use 'claude' or 'gemini'.")
 

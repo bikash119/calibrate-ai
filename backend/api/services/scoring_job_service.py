@@ -24,7 +24,7 @@ from db_models import (
     ScoringJobRepository,
     SplitRepository,
 )
-from llm_client import get_llm_client
+from llm_client import DEFAULT_PROVIDER, default_model_for, get_llm_client
 from prompts import build_user_prompt
 
 logger = logging.getLogger("scoring_ai.services.scoring_job")
@@ -98,8 +98,10 @@ class ScoringJobService:
         if not criteria:
             raise ValueError("Project has no rubric")
 
-        chosen_provider = (provider or os.environ.get("LLM_PROVIDER", "claude")).lower()
-        chosen_model = model or _default_model(chosen_provider)
+        chosen_provider = (
+            provider or os.environ.get("LLM_PROVIDER", DEFAULT_PROVIDER)
+        ).lower()
+        chosen_model = model or default_model_for(chosen_provider)
 
         job_id = self.job_repo.create(ScoringJob(
             project_id=project_id,
@@ -263,7 +265,11 @@ def run_scoring_job(job_id: int) -> None:
     logger.info("Job %d running: %d apps × %d criteria", job_id, len(app_ids), len(criteria))
 
     try:
-        client = get_llm_client()
+        # Honor the provider/model the job was created with, not whatever
+        # the env var happens to be at worker-call time. This is what makes
+        # the recorded `job.provider` / `job.model` match what the worker
+        # actually calls.
+        client = get_llm_client(provider=job.provider, model=job.model)
         progress = 0
         for aid in app_ids:
             app = apps_by_id.get(aid)
@@ -302,10 +308,6 @@ def run_scoring_job(job_id: int) -> None:
         job_repo.update_status(job_id, "failed", error_message=str(e))
 
 
-# ------------------------------------------------------------------ #
-
-
-def _default_model(provider: str) -> str:
-    if provider == "gemini":
-        return "gemini-2.5-flash"
-    return "claude-haiku-4-5"
+# Provider/model defaults moved to `llm_client.default_model_for` so the
+# value recorded on the job and the value the worker actually calls share
+# one source of truth.
