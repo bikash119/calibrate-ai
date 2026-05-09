@@ -197,11 +197,22 @@ CREATE TABLE IF NOT EXISTS iterations (
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     version INTEGER NOT NULL,
     note TEXT,
+    -- 'active' (default), 'draft' (saved but not committed for scoring),
+    -- 'abandoned' (operator gave up; ignored by convergence chart + lock).
+    status TEXT NOT NULL DEFAULT 'active'
+        CHECK(status IN ('draft', 'active', 'abandoned')),
+    -- Lineage: which iteration's prompts/scores are inherited for criteria
+    -- the operator did NOT edit this round. Null on v1 (no parent).
+    parent_iteration_id INTEGER REFERENCES iterations(id) ON DELETE SET NULL,
+    -- JSON list of criterion ids the operator explicitly edited this round.
+    -- Criteria not in this list reuse the parent iteration's prompts and scores.
+    edited_criterion_ids_json TEXT NOT NULL DEFAULT '[]',
     created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(project_id, version)
 );
 CREATE INDEX IF NOT EXISTS idx_iterations_project ON iterations(project_id);
+CREATE INDEX IF NOT EXISTS idx_iterations_parent ON iterations(parent_iteration_id);
 
 CREATE TABLE IF NOT EXISTS iteration_prompts (
     iteration_id INTEGER NOT NULL REFERENCES iterations(id) ON DELETE CASCADE,
@@ -347,7 +358,41 @@ def init_db(db_path: Path | str | None = None) -> Path:
     db_path = Path(db_path) if db_path else get_db_path()
     with get_db_cursor(db_path) as cursor:
         cursor.executescript(SCHEMA)
+        _apply_forward_migrations(cursor)
     return db_path
+
+
+def _apply_forward_migrations(cursor) -> None:
+    """Idempotent column additions for existing databases.
+
+    `CREATE TABLE IF NOT EXISTS` does nothing once a table exists, so adding
+    columns to a long-lived dev/prod DB needs explicit ALTER. Each block
+    below checks for the column and adds it if missing — safe to re-run.
+    """
+    def has_column(table: str, column: str) -> bool:
+        rows = cursor.execute(f"PRAGMA table_info({table})").fetchall()
+        return any(r["name"] == column for r in rows)
+
+    # iterations: shape-A per-criterion iteration support
+    if not has_column("iterations", "status"):
+        cursor.execute(
+            "ALTER TABLE iterations ADD COLUMN status TEXT NOT NULL "
+            "DEFAULT 'active' CHECK(status IN ('draft', 'active', 'abandoned'))"
+        )
+    if not has_column("iterations", "parent_iteration_id"):
+        cursor.execute(
+            "ALTER TABLE iterations ADD COLUMN parent_iteration_id INTEGER "
+            "REFERENCES iterations(id) ON DELETE SET NULL"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_iterations_parent "
+            "ON iterations(parent_iteration_id)"
+        )
+    if not has_column("iterations", "edited_criterion_ids_json"):
+        cursor.execute(
+            "ALTER TABLE iterations ADD COLUMN edited_criterion_ids_json "
+            "TEXT NOT NULL DEFAULT '[]'"
+        )
 
 
 def drop_all_tables(db_path: Path | str | None = None) -> None:

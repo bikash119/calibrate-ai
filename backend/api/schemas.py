@@ -427,9 +427,26 @@ class CriterionPromptItem(BaseModel):
 
 
 class IterationCreateRequest(BaseModel):
-    """POST /api/projects/{id}/iterations — create a new prompt version."""
-    prompts: list[CriterionPromptInput]
+    """POST /api/projects/{id}/iterations — create a new prompt version.
+
+    Two creation modes:
+    - **Full** (legacy): leave `parent_iteration_id` and `edited_criterion_ids`
+      unset. `prompts` either auto-generates (empty) or covers every criterion.
+    - **Sparse overlay** (shape A): set `parent_iteration_id` to the prior
+      iteration and `edited_criterion_ids` to the criteria you're revising.
+      `prompts` only needs entries for those criteria; everything else is
+      inherited from the parent and will reuse its scores at scoring time.
+    """
+    prompts: list[CriterionPromptInput] = []
     note: str | None = None
+    parent_iteration_id: int | None = None
+    edited_criterion_ids: list[int] | None = None
+    as_draft: bool = False
+
+
+class IterationStatusUpdateRequest(BaseModel):
+    """POST /api/projects/{pid}/iterations/{iid}/status — flip draft/active/abandoned."""
+    status: str    # 'draft' | 'active' | 'abandoned'
 
 
 class IterationCriterionMetric(BaseModel):
@@ -448,6 +465,9 @@ class IterationItem(BaseModel):
     project_id: int
     version: int
     note: str | None = None
+    status: str = "active"
+    parent_iteration_id: int | None = None
+    edited_criterion_ids: list[int] = []
     dev_metrics: list[IterationCriterionMetric] = []      # derived
     validation_metrics: list[IterationCriterionMetric] = []  # derived
     overall_dev_qwk: float | None = None                  # derived
@@ -461,6 +481,9 @@ class IterationDetailResponse(BaseModel):
     project_id: int
     version: int
     note: str | None = None
+    status: str = "active"
+    parent_iteration_id: int | None = None
+    edited_criterion_ids: list[int] = []
     prompts: list[CriterionPromptItem]
     dev_metrics: list[IterationCriterionMetric] = []
     validation_metrics: list[IterationCriterionMetric] = []

@@ -663,6 +663,9 @@ class Iteration:
     project_id: int = 0
     version: int = 1
     note: str | None = None
+    status: str = "active"                      # 'draft' | 'active' | 'abandoned'
+    parent_iteration_id: int | None = None      # lineage; null on v1
+    edited_criterion_ids_json: str = "[]"       # ids the operator edited this round
     created_by: int | None = None
     created_at: str | None = None
 
@@ -707,11 +710,28 @@ class IterationRepository:
     def create(self, iteration: Iteration) -> int:
         with get_db_cursor() as cursor:
             cursor.execute(
-                """INSERT INTO iterations (project_id, version, note, created_by)
-                   VALUES (?, ?, ?, ?)""",
-                (iteration.project_id, iteration.version, iteration.note, iteration.created_by),
+                """INSERT INTO iterations
+                   (project_id, version, note, status, parent_iteration_id,
+                    edited_criterion_ids_json, created_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    iteration.project_id,
+                    iteration.version,
+                    iteration.note,
+                    iteration.status,
+                    iteration.parent_iteration_id,
+                    iteration.edited_criterion_ids_json,
+                    iteration.created_by,
+                ),
             )
             return cursor.lastrowid
+
+    def update_status(self, iteration_id: int, status: str) -> None:
+        with get_db_cursor() as cursor:
+            cursor.execute(
+                "UPDATE iterations SET status = ? WHERE id = ?",
+                (status, iteration_id),
+            )
 
 
 @dataclass

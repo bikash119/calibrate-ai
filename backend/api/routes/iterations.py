@@ -15,6 +15,7 @@ from api.schemas import (
     IterationDetailResponse,
     IterationItem,
     IterationsListResponse,
+    IterationStatusUpdateRequest,
 )
 from api.services.iteration_service import IterationService
 
@@ -41,6 +42,9 @@ def list_iterations(
                 project_id=r["project_id"],
                 version=r["version"],
                 note=r["note"],
+                status=r["status"],
+                parent_iteration_id=r["parent_iteration_id"],
+                edited_criterion_ids=r["edited_criterion_ids"],
                 dev_metrics=[IterationCriterionMetric(**m) for m in r["dev_metrics"]],
                 validation_metrics=[IterationCriterionMetric(**m) for m in r["validation_metrics"]],
                 overall_dev_qwk=r["overall_dev_qwk"],
@@ -68,11 +72,44 @@ def create_iteration(
     prompts = [p.model_dump() for p in body.prompts] if body.prompts else None
     try:
         iteration_id = service.create(
-            project_id, prompts, body.note, int(current_user["sub"]),
+            project_id,
+            prompts,
+            body.note,
+            int(current_user["sub"]),
+            parent_iteration_id=body.parent_iteration_id,
+            edited_criterion_ids=body.edited_criterion_ids,
+            as_draft=body.as_draft,
         )
     except ValueError as e:
         if "not found" in str(e).lower():
             raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    return _detail_response(service, project_id, iteration_id)
+
+
+@router.post(
+    "/iterations/{iteration_id}/status",
+    response_model=IterationDetailResponse,
+)
+def update_iteration_status(
+    project_id: int,
+    iteration_id: int,
+    body: IterationStatusUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+) -> IterationDetailResponse:
+    """Move an iteration between draft / active / abandoned.
+
+    Abandoned iterations are ignored by the convergence chart and lock step
+    but stay queryable (you'll want to learn from dead ends).
+    """
+    service = IterationService()
+    # Resolve the iteration first so a 404 from cross-project access is clear.
+    it = service.iteration_repo.get_by_id(iteration_id)
+    if not it or it.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Iteration not found in project")
+    try:
+        service.update_status(iteration_id, body.status, int(current_user["sub"]))
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return _detail_response(service, project_id, iteration_id)
 
@@ -124,6 +161,9 @@ def _detail_response(service: IterationService, project_id: int, iteration_id: i
         project_id=d["project_id"],
         version=d["version"],
         note=d["note"],
+        status=d["status"],
+        parent_iteration_id=d["parent_iteration_id"],
+        edited_criterion_ids=d["edited_criterion_ids"],
         prompts=[CriterionPromptItem(**p) for p in d["prompts"]],
         dev_metrics=[IterationCriterionMetric(**m) for m in d["dev_metrics"]],
         validation_metrics=[IterationCriterionMetric(**m) for m in d["validation_metrics"]],
