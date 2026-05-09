@@ -43,6 +43,7 @@ import {
   type TrafficStatus,
 } from "../components/ui/TrafficLight";
 import { useBaseline } from "../hooks/useBaseline";
+import { useCreateIteration, useIterations } from "../hooks/useIterations";
 import { useRubric } from "../hooks/useRubric";
 
 // ------------------------------------------------------------------ //
@@ -105,12 +106,24 @@ export function CreateIterationPage() {
 
   const rubric = useRubric(projectId);
   const baseline = useBaseline(projectId);
+  const iterations = useIterations(projectId);
+  const create = useCreateIteration(projectId ?? 0);
 
-  // Until we wire a real "current iteration version" hook, treat the from
-  // version as 1 and the new version as 2 — the design used 4 → 5; the exact
-  // number doesn't change the screen's structure.
-  const fromVersion = 1;
+  // Use the project's latest iteration as the parent for shape-A inheritance.
+  // If there are no iterations yet (new project), this is a "v1" creation
+  // and the overlay path is bypassed (parent_iteration_id stays null).
+  const parentIteration = useMemo(() => {
+    const list = iterations.data?.iterations ?? [];
+    if (list.length === 0) return null;
+    return list.reduce((a, b) => (a.version > b.version ? a : b));
+  }, [iterations.data]);
+
+  const fromVersion = parentIteration?.version ?? 0;
   const toVersion = fromVersion + 1;
+  // Operator is editing prompts directly. The criterion-edit selector below
+  // captures the "edited_criterion_ids" set; prompts come from the textarea
+  // in each CriterionEditor.
+  const [editedPromptText, setEditedPromptText] = useState<Record<number, string>>({});
 
   const criteria: CriterionRow[] = useMemo(() => {
     const items = rubric.data?.criteria ?? [];
@@ -169,6 +182,31 @@ export function CreateIterationPage() {
   }
   const effectiveExpanded =
     expanded ?? (editedIds.length > 0 ? editedIds[0] : null);
+
+  const submitIteration = async (asDraft: boolean) => {
+    if (editedIds.length === 0 || projectId == null) return;
+    // Default-prompt fallback used when the operator marked a criterion as
+    // edited but didn't touch the textarea. Backend will auto-generate when
+    // we send no prompt for that criterion.
+    const promptsBody = editedIds
+      .filter((id) => editedPromptText[id] && editedPromptText[id]!.trim())
+      .map((id) => ({
+        criterion_id: id,
+        system_prompt: editedPromptText[id]!,
+      }));
+    try {
+      await create.mutateAsync({
+        prompts: promptsBody,
+        note: null,
+        parent_iteration_id: parentIteration?.id ?? null,
+        edited_criterion_ids: editedIds,
+        as_draft: asDraft,
+      });
+      navigate(`/projects/${projectId}/iterate`);
+    } catch {
+      // surfaced via create.error in the rail
+    }
+  };
 
   return (
     <div>
@@ -371,6 +409,10 @@ export function CreateIterationPage() {
                 isOpen={effectiveExpanded === id}
                 onToggle={() =>
                   setExpanded(effectiveExpanded === id ? null : id)
+                }
+                promptText={editedPromptText[id]}
+                onPromptChange={(text) =>
+                  setEditedPromptText((s) => ({ ...s, [id]: text }))
                 }
               />
             );
@@ -583,30 +625,39 @@ export function CreateIterationPage() {
             <div className="grid gap-1.5">
               <button
                 className="btn btn-primary btn-lg w-full justify-center"
-                disabled={editedIds.length === 0}
+                disabled={editedIds.length === 0 || create.isPending}
                 title={
                   editedIds.length === 0
                     ? "Pick at least one criterion to edit"
-                    : "Backend not yet wired — UI mock"
+                    : undefined
                 }
-                onClick={() => {
-                  // TODO: wire to POST /iterations with sparse prompt overlay
-                  // (shape A). For now, navigate back so the click does
-                  // *something* visible.
-                  alert(
-                    "Backend not wired yet — this is a UI mock. The action would create v" +
-                      toVersion +
-                      (postCreate.scoreDev ? " and queue scoring." : "."),
-                  );
-                  navigate(`/projects/${projectId}/iterate`);
-                }}
+                onClick={() => submitIteration(false)}
               >
-                <Check className="w-4 h-4" /> Create v{toVersion}
-                {postCreate.scoreDev ? " & run" : ""}
+                <Check className="w-4 h-4" />
+                {create.isPending
+                  ? "Creating…"
+                  : `Create v${toVersion}${postCreate.scoreDev ? " & run" : ""}`}
               </button>
-              <button className="btn w-full justify-center">
-                <FileText className="w-3.5 h-3.5" /> Save as draft
+              <button
+                className="btn w-full justify-center"
+                disabled={editedIds.length === 0 || create.isPending}
+                onClick={() => submitIteration(true)}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                {create.isPending ? "Saving…" : "Save as draft"}
               </button>
+              {create.error && (
+                <div
+                  className="text-xs px-2 py-1.5 rounded-[var(--radius-sm)]"
+                  style={{
+                    background: "var(--red-bg)",
+                    border: "1px solid var(--red-border)",
+                    color: "var(--red-fg)",
+                  }}
+                >
+                  {create.error.message}
+                </div>
+              )}
             </div>
 
             <hr
@@ -695,19 +746,25 @@ function CriterionEditor({
   toVersion,
   isOpen,
   onToggle,
+  promptText,
+  onPromptChange,
 }: {
   row: CriterionRow;
   fromVersion: number;
   toVersion: number;
   isOpen: boolean;
   onToggle: () => void;
+  /** Lifted prompt text — undefined falls back to a generated default. */
+  promptText: string | undefined;
+  onPromptChange: (text: string) => void;
 }) {
   const [tab, setTab] = useState<"prompt" | "lessons" | "examples">("prompt");
-  const [prompt, setPrompt] = useState(
+  const defaultPrompt =
     `## Criterion ${row.id} — ${row.name}\n` +
-      `Description: ${row.description}\n` +
-      `Scale: 1 to 3\n`,
-  );
+    `Description: ${row.description}\n` +
+    `Scale: 1 to 3\n`;
+  const prompt = promptText ?? defaultPrompt;
+  const setPrompt = onPromptChange;
   const [suggested, setSuggested] = useState(false);
   const [maxExamples, setMaxExamples] = useState(8);
   const [lessonsOn, setLessonsOn] = useState(true);

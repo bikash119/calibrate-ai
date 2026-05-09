@@ -35,6 +35,14 @@ export function useIteration(projectId: number | undefined, iterationId: number 
 interface CreateIterationBody {
   prompts: CriterionPromptInput[];   // empty array → auto-generate from rubric
   note?: string | null;
+  /** Per-criterion overlay (shape A): set to inherit unchanged criteria
+   *  from a prior iteration. Omit for a full new version. */
+  parent_iteration_id?: number | null;
+  /** Criterion ids the operator is editing this round. Required when
+   *  `parent_iteration_id` is set; ignored otherwise. */
+  edited_criterion_ids?: number[] | null;
+  /** Save without committing to scoring. Default false. */
+  as_draft?: boolean;
 }
 
 export function useCreateIteration(projectId: number) {
@@ -49,6 +57,27 @@ export function useCreateIteration(projectId: number) {
       qc.invalidateQueries({ queryKey: ["iterations", projectId] });
       qc.invalidateQueries({ queryKey: ["project", projectId] });
       qc.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+}
+
+interface UpdateIterationStatusBody {
+  iterationId: number;
+  status: "draft" | "active" | "abandoned";
+}
+
+export function useUpdateIterationStatus(projectId: number) {
+  const qc = useQueryClient();
+  return useMutation<IterationDetailResponse, Error, UpdateIterationStatusBody>({
+    mutationFn: ({ iterationId, status }) =>
+      apiFetch(
+        `/projects/${projectId}/iterations/${iterationId}/status`,
+        IterationDetailResponseSchema,
+        { method: "POST", body: JSON.stringify({ status }) },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["iterations", projectId] });
+      qc.invalidateQueries({ queryKey: ["iteration", projectId] });
     },
   });
 }
