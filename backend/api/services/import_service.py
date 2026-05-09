@@ -63,57 +63,7 @@ class ImportService:
     ) -> dict:
         """Return sheet metadata + a small preview. Never persists the file."""
         self._require_setup_state(project_id)
-        self._validate_size(file_bytes)
-        fmt = _detect_format(filename)
-
-        if fmt == "csv":
-            # header=None: every row stays in the dataframe so the operator
-            # can choose which row holds questions in the wizard.
-            preview_df = _read_csv(file_bytes, header=None, nrows=PREVIEW_ROWS)
-            full_row_count = _count_csv_rows(file_bytes)
-            sheet = "(csv)"
-            sheets = [{
-                "name": sheet,
-                "rows": full_row_count,
-                "columns": int(preview_df.shape[1]) if preview_df.shape[1] else 0,
-            }]
-            preview = {
-                "name": sheet,
-                "total_rows": full_row_count,
-                "rows": _df_to_preview_rows(preview_df),
-            }
-            return {
-                "format": "csv",
-                "sheets": sheets,
-                "suggested_sheet": sheet,
-                "preview": preview,
-            }
-
-        # xlsx
-        xlsx = _open_xlsx(file_bytes)
-        sheets = []
-        for name in xlsx.sheet_names:
-            df = xlsx.parse(name, header=None, nrows=0)
-            full_df = xlsx.parse(name, header=None)
-            sheets.append({
-                "name": name,
-                "rows": int(full_df.shape[0]),
-                "columns": int(full_df.shape[1] if full_df.shape[1] else len(df.columns)),
-            })
-        suggested = xlsx.sheet_names[0]
-        preview_df = xlsx.parse(suggested, header=None, nrows=PREVIEW_ROWS)
-        full_df = xlsx.parse(suggested, header=None)
-        preview = {
-            "name": suggested,
-            "total_rows": int(full_df.shape[0]),
-            "rows": _df_to_preview_rows(preview_df),
-        }
-        return {
-            "format": "xlsx",
-            "sheets": sheets,
-            "suggested_sheet": suggested,
-            "preview": preview,
-        }
+        return parse_to_grid(file_bytes, filename)
 
     # ------------------------------------------------------------------ #
     # Atomic import                                                      #
@@ -319,6 +269,84 @@ class ImportService:
             raise ImportError(
                 f"File too large ({len(file_bytes)} bytes); max is {MAX_FILE_BYTES}"
             )
+
+
+# ============================================================
+# Generic file → 2D grid (shared by dataset and human-score parse routes)
+# ============================================================
+
+
+def parse_to_grid(
+    file_bytes: bytes,
+    filename: str,
+    *,
+    full_rows: bool = False,
+) -> dict:
+    """Parse a CSV/XLSX upload into a 2D grid + sheet metadata.
+
+    No project-state coupling — both dataset import and human-score upload
+    use this same shape. Caller is responsible for any state checks.
+
+    `full_rows=False` (default) emits the first PREVIEW_ROWS rows — used by
+    the dataset wizard, where the actual ingest happens server-side later.
+    `full_rows=True` emits every row — used by the human-score wizard, which
+    pivots client-side and POSTs the long-form rows back as JSON.
+
+    Returns the dict shape consumed by `ImportPreviewResponse`:
+        {format, sheets: [{name, rows, columns}], suggested_sheet, preview: {...}}
+    """
+    if len(file_bytes) > MAX_FILE_BYTES:
+        raise ImportError(
+            f"File too large ({len(file_bytes)} bytes); max is {MAX_FILE_BYTES}"
+        )
+    fmt = _detect_format(filename)
+    nrows = None if full_rows else PREVIEW_ROWS
+
+    if fmt == "csv":
+        # header=None so every row stays in the dataframe — the operator
+        # picks which row holds the headers in the wizard.
+        preview_df = _read_csv(file_bytes, header=None, nrows=nrows)
+        full_row_count = _count_csv_rows(file_bytes)
+        sheet = "(csv)"
+        return {
+            "format": "csv",
+            "sheets": [{
+                "name": sheet,
+                "rows": full_row_count,
+                "columns": int(preview_df.shape[1]) if preview_df.shape[1] else 0,
+            }],
+            "suggested_sheet": sheet,
+            "preview": {
+                "name": sheet,
+                "total_rows": full_row_count,
+                "rows": _df_to_preview_rows(preview_df),
+            },
+        }
+
+    # xlsx
+    xlsx = _open_xlsx(file_bytes)
+    sheets = []
+    for name in xlsx.sheet_names:
+        df = xlsx.parse(name, header=None, nrows=0)
+        full_df = xlsx.parse(name, header=None)
+        sheets.append({
+            "name": name,
+            "rows": int(full_df.shape[0]),
+            "columns": int(full_df.shape[1] if full_df.shape[1] else len(df.columns)),
+        })
+    suggested = xlsx.sheet_names[0]
+    preview_df = xlsx.parse(suggested, header=None, nrows=nrows)
+    full_df = xlsx.parse(suggested, header=None)
+    return {
+        "format": "xlsx",
+        "sheets": sheets,
+        "suggested_sheet": suggested,
+        "preview": {
+            "name": suggested,
+            "total_rows": int(full_df.shape[0]),
+            "rows": _df_to_preview_rows(preview_df),
+        },
+    }
 
 
 # ============================================================

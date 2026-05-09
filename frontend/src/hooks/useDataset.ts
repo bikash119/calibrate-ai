@@ -130,6 +130,22 @@ interface HumanScoreUpload {
   score: number;
 }
 
+/** Parse a CSV/XLSX human-score upload to drive the wide-upload wizard's
+ *  preview UI. Same response shape as `/dataset/parse`. */
+export function useHumanScoresPreview(projectId: number) {
+  return useMutation<ImportPreviewResponse, Error, File>({
+    mutationFn: (file) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return apiFetch(
+        `/projects/${projectId}/human-scores/parse`,
+        ImportPreviewResponseSchema,
+        { method: "POST", body: fd },
+      );
+    },
+  });
+}
+
 export function useUploadHumanScores(projectId: number) {
   const qc = useQueryClient();
   return useMutation<LoadResult, Error, HumanScoreUpload[]>({

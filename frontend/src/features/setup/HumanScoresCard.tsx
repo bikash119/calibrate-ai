@@ -107,6 +107,7 @@ export function HumanScoresCard({ projectId, disabled }: Props) {
 
       {uploadMode === "wide" && (
         <WideUploadModal
+          projectId={projectId}
           criteriaNames={criteriaNames}
           onClose={() => {
             setUploadMode(null);

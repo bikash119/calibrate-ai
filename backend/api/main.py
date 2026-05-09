@@ -27,6 +27,7 @@ from api.routes import (
     dataset_router,
     dataset_import_router,
     demo_router,
+    human_scores_import_router,
     disagreements_iteration_router,
     disagreements_project_router,
     iterations_router,
@@ -80,6 +81,7 @@ app.include_router(projects_router, dependencies=protected)
 app.include_router(rubric_router, dependencies=protected)
 app.include_router(dataset_router, dependencies=protected)
 app.include_router(dataset_import_router, dependencies=protected)
+app.include_router(human_scores_import_router, dependencies=protected)
 app.include_router(splits_router, dependencies=protected)
 app.include_router(iterations_router, dependencies=protected)
 app.include_router(scoring_submit_router, dependencies=protected)

@@ -10,6 +10,7 @@ from .dashboard import router as dashboard_router
 from .dataset import router as dataset_router
 from .dataset_import import router as dataset_import_router
 from .demo import router as demo_router
+from .human_scores_import import router as human_scores_import_router
 from .disagreements import (
     iteration_router as disagreements_iteration_router,
     project_router as disagreements_project_router,
@@ -43,6 +44,7 @@ __all__ = [
     "dataset_router",
     "dataset_import_router",
     "demo_router",
+    "human_scores_import_router",
     "disagreements_iteration_router",
     "disagreements_project_router",
     "iterations_router",
