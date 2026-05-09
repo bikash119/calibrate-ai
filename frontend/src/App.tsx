@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { LoginPage } from "./auth/LoginPage";
 import { AppShell } from "./layouts/AppShell";
 import { BaselinePage } from "./pages/BaselinePage";
+import { CreateIterationPage } from "./pages/CreateIterationPage";
 import { IteratePage } from "./pages/IteratePage";
 import { LockedPromptDetail } from "./pages/LockedPromptDetail";
 import { LockedPromptsLibrary } from "./pages/LockedPromptsLibrary";
@@ -54,6 +55,7 @@ function AppRoutes() {
         <Route path="/projects/:projectId/setup" element={<SetupPage />} />
         <Route path="/projects/:projectId/baseline" element={<BaselinePage />} />
         <Route path="/projects/:projectId/iterate" element={<IteratePage />} />
+        <Route path="/projects/:projectId/iterate/new" element={<CreateIterationPage />} />
         <Route path="/projects/:projectId/test" element={<PostTestPage />} />
         <Route path="/projects/:projectId/history" element={<ProjectHistoryPage />} />
         <Route path="/programs" element={<ProgramsPage />} />

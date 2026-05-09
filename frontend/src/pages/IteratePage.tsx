@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Plus } from "lucide-react";
+import { Link, useParams } from "react-router-dom";
 
 import { Banner } from "../components/ui/Banner";
 import { PageHead } from "../components/ui/PageHead";
@@ -100,6 +101,14 @@ export function IteratePage() {
         eyebrow={proj.name}
         title="Iterate"
         lede="Generate, edit, and compare prompts. Score the dev split, watch LLM-H agreement against the H-H ceiling, triage disagreements, and refine."
+        actions={
+          <Link
+            to={`/projects/${projectId}/iterate/new`}
+            className="btn btn-primary btn-sm"
+          >
+            <Plus className="w-3 h-3" /> Create iteration
+          </Link>
+        }
       />
 
       {!stateOk && (
