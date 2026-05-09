@@ -43,45 +43,16 @@ import {
   type TrafficStatus,
 } from "../components/ui/TrafficLight";
 import { useBaseline } from "../hooks/useBaseline";
-import { useCreateIteration, useIterations } from "../hooks/useIterations";
+import { useCalibrationExamples } from "../hooks/useCalibration";
+import { useDisagreements } from "../hooks/useDisagreements";
+import {
+  useCreateIteration,
+  useIteration,
+  useIterations,
+  useSuggestPrompt,
+} from "../hooks/useIterations";
 import { useRubric } from "../hooks/useRubric";
-
-// ------------------------------------------------------------------ //
-// Mock helpers (no backend hooks yet for these — design uses fixtures)
-// ------------------------------------------------------------------ //
-
-/** Synthesized "what v(N) got wrong" entries per criterion. Real wiring
- *  would come from a `useDisagreements(projectId, iterationId, flag="human_correct")` hook. */
-function mockLessons(criterionId: number): {
-  appId: string;
-  llm: number;
-  human: number;
-  reason: string;
-}[] {
-  // Deterministic, criterion-id-keyed, no API calls. Just placeholder text.
-  const seeds = ["APP-0073", "APP-0142", "APP-0207"];
-  const base = (criterionId * 7) % 5;
-  return seeds.slice(0, 3).map((appId, i) => ({
-    appId,
-    llm: ((base + i) % 4) + 1,
-    human: ((base + i + 2) % 4) + 1,
-    reason:
-      i === 0
-        ? "LLM rewarded surface specificity over substantive scope."
-        : i === 1
-          ? "LLM under-credited concrete pilot evidence."
-          : "LLM applied criterion's anchors too leniently for partial coverage.",
-  }));
-}
-
-const MOCK_EXAMPLES = [
-  { app: "APP-0073", source: "operator_flagged", score: 5, delta: -2, on: true },
-  { app: "APP-0142", source: "operator_flagged", score: 2, delta: 2, on: true },
-  { app: "APP-0091", source: "evaluator_consensus", score: 3, delta: 0, on: true },
-  { app: "APP-0118", source: "evaluator_consensus", score: 4, delta: 0, on: true },
-  { app: "APP-0207", source: "auto", score: 2, delta: 1, on: true },
-  { app: "APP-0312", source: "auto", score: 4, delta: 0, on: false },
-];
+import type { DisagreementItem } from "../schemas";
 
 // ------------------------------------------------------------------ //
 
@@ -95,8 +66,6 @@ interface CriterionRow {
    *  per-criterion QWK on the dev split. Here we offset baseline by a fixed
    *  amount so the traffic light renders meaningfully. */
   llmH: number;
-  exampleCount: number;
-  errorCount: number;
 }
 
 export function CreateIterationPage() {
@@ -118,6 +87,30 @@ export function CreateIterationPage() {
     return list.reduce((a, b) => (a.version > b.version ? a : b));
   }, [iterations.data]);
 
+  // Lessons + LLM-H come from the parent iteration's dev split.
+  // Detail gives us per-criterion qwk for the traffic light; disagreements
+  // give us "what v(N) got wrong" for each criterion's Lessons tab.
+  const parentDetail = useIteration(projectId, parentIteration?.id);
+  const parentDisagreements = useDisagreements(
+    projectId,
+    parentIteration?.id,
+    "dev",
+  );
+  const llmHByCriterion = useMemo(() => {
+    const map: Record<number, number> = {};
+    for (const m of parentDetail.data?.dev_metrics ?? []) {
+      if (m.qwk != null) map[m.criterion_id] = m.qwk;
+    }
+    return map;
+  }, [parentDetail.data]);
+  const disagreementsByCriterion = useMemo(() => {
+    const map: Record<number, DisagreementItem[]> = {};
+    for (const d of parentDisagreements.data?.disagreements ?? []) {
+      (map[d.criterion_id] ??= []).push(d);
+    }
+    return map;
+  }, [parentDisagreements.data]);
+
   const fromVersion = parentIteration?.version ?? 0;
   const toVersion = fromVersion + 1;
   // Operator is editing prompts directly. The criterion-edit selector below
@@ -133,8 +126,7 @@ export function CreateIterationPage() {
       );
       const qwk = m?.value ?? 0;
       const low = m?.ci_low ?? Math.max(0, qwk - 0.05);
-      // No "latest LLM-H" hook bound here — synthesize for the traffic light.
-      const llmH = Math.max(0, qwk - 0.07);
+      const llmH = llmHByCriterion[c.id] ?? Math.max(0, qwk - 0.07);
       return {
         id: c.id,
         name: c.name,
@@ -142,11 +134,9 @@ export function CreateIterationPage() {
         qwk,
         qwkLow: low,
         llmH,
-        exampleCount: 8,
-        errorCount: 5,
       };
     });
-  }, [rubric.data, baseline.data]);
+  }, [rubric.data, baseline.data, llmHByCriterion]);
 
   // ---- form state -------------------------------------------------- //
 
@@ -404,6 +394,8 @@ export function CreateIterationPage() {
               <CriterionEditor
                 key={id}
                 row={row}
+                projectId={projectId ?? 0}
+                parentIterationId={parentIteration?.id ?? null}
                 fromVersion={fromVersion}
                 toVersion={toVersion}
                 isOpen={effectiveExpanded === id}
@@ -414,6 +406,8 @@ export function CreateIterationPage() {
                 onPromptChange={(text) =>
                   setEditedPromptText((s) => ({ ...s, [id]: text }))
                 }
+                disagreements={disagreementsByCriterion[id] ?? []}
+                lessonCap={lessonCap}
               />
             );
           })}
@@ -742,14 +736,20 @@ export function CreateIterationPage() {
 
 function CriterionEditor({
   row,
+  projectId,
+  parentIterationId,
   fromVersion,
   toVersion,
   isOpen,
   onToggle,
   promptText,
   onPromptChange,
+  disagreements,
+  lessonCap,
 }: {
   row: CriterionRow;
+  projectId: number;
+  parentIterationId: number | null;
   fromVersion: number;
   toVersion: number;
   isOpen: boolean;
@@ -757,6 +757,8 @@ function CriterionEditor({
   /** Lifted prompt text — undefined falls back to a generated default. */
   promptText: string | undefined;
   onPromptChange: (text: string) => void;
+  disagreements: DisagreementItem[];
+  lessonCap: number;
 }) {
   const [tab, setTab] = useState<"prompt" | "lessons" | "examples">("prompt");
   const defaultPrompt =
@@ -765,11 +767,35 @@ function CriterionEditor({
     `Scale: 1 to 3\n`;
   const prompt = promptText ?? defaultPrompt;
   const setPrompt = onPromptChange;
-  const [suggested, setSuggested] = useState(false);
   const [maxExamples, setMaxExamples] = useState(8);
   const [lessonsOn, setLessonsOn] = useState(true);
 
-  const lessons = useMemo(() => mockLessons(row.id), [row.id]);
+  const suggestMut = useSuggestPrompt(projectId);
+  const suggestion = suggestMut.data ?? null;
+  const requestSuggestion = () => {
+    if (parentIterationId == null) return;
+    suggestMut.mutate({
+      iterationId: parentIterationId,
+      criterionId: row.id,
+      currentPrompt: prompt,
+      lessonCap,
+    });
+  };
+
+  // Real calibration examples, fetched per criterion when this editor renders.
+  const examplesQ = useCalibrationExamples(projectId, row.id);
+  const examples = examplesQ.data?.examples ?? [];
+  const exampleCount = examples.filter((e) => e.is_active).length;
+
+  // "Lessons from v(N)": the parent iteration's disagreements where the LLM
+  // diverged from the human median, capped at the operator-set cap. We
+  // don't filter by `flag === human_correct` here because the disagreements
+  // endpoint already returns the candidate triage list — many won't be
+  // flagged yet, but they're still useful as in-prompt teaching signal.
+  const lessons = disagreements
+    .filter((d) => d.delta !== 0)
+    .slice(0, lessonCap);
+  const errorCount = disagreements.filter((d) => d.delta !== 0).length;
 
   return (
     <div
@@ -816,9 +842,9 @@ function CriterionEditor({
             className="text-[11px] mt-0.5"
             style={{ color: "var(--fg-muted)" }}
           >
-            {row.errorCount} flagged disagreement
-            {row.errorCount === 1 ? "" : "s"} from v{fromVersion} ·{" "}
-            {row.exampleCount} active calibration examples
+            {errorCount} flagged disagreement
+            {errorCount === 1 ? "" : "s"} from v{fromVersion} ·{" "}
+            {exampleCount} active calibration examples
           </div>
         </div>
         {!isOpen && <span className="pill text-[10px]">Edit</span>}
@@ -838,7 +864,7 @@ function CriterionEditor({
               [
                 ["prompt", "Prompt", Pencil],
                 ["lessons", `Lessons from v${fromVersion}`, Flag],
-                ["examples", `Examples (${row.exampleCount})`, Layers],
+                ["examples", `Examples (${exampleCount})`, Layers],
               ] as const
             ).map(([k, label, Ic]) => (
               <button
@@ -879,12 +905,23 @@ function CriterionEditor({
                   </button>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  {!suggested ? (
+                  {!suggestion ? (
                     <button
                       className="btn btn-sm"
-                      onClick={() => setSuggested(true)}
+                      onClick={requestSuggestion}
+                      disabled={
+                        parentIterationId == null || suggestMut.isPending
+                      }
+                      title={
+                        parentIterationId == null
+                          ? "No parent iteration to learn from yet — create v1 first."
+                          : undefined
+                      }
                     >
-                      <Sparkles className="w-3 h-3" /> Suggest refinement
+                      <Sparkles className="w-3 h-3" />
+                      {suggestMut.isPending
+                        ? "Drafting…"
+                        : "Suggest refinement"}
                     </button>
                   ) : (
                     <span className="pill pill-accent text-[10px]">
@@ -895,7 +932,20 @@ function CriterionEditor({
                 </div>
               </div>
 
-              {suggested && (
+              {suggestMut.error && (
+                <div
+                  className="text-xs px-3 py-2 rounded-[var(--radius-sm)] mb-2.5"
+                  style={{
+                    background: "var(--red-bg)",
+                    border: "1px solid var(--red-border)",
+                    color: "var(--red-fg)",
+                  }}
+                >
+                  {suggestMut.error.message}
+                </div>
+              )}
+
+              {suggestion && (
                 <div
                   style={{
                     background: "var(--accent-bg)",
@@ -913,27 +963,43 @@ function CriterionEditor({
                       style={{ color: "var(--accent)" }}
                     />
                     <strong style={{ color: "var(--accent)" }}>
-                      Suggested refinement (claude-opus-4-7)
+                      Suggested refinement
                     </strong>
                   </div>
                   <div style={{ color: "var(--fg-muted)" }}>
-                    Based on {row.errorCount} flagged disagreements where
-                    humans corrected the LLM, this draft adds an explicit rule:{" "}
-                    <em>
-                      "When pilot results are cited with a numeric outcome,
-                      treat the magnitude itself as evidence — do not require
-                      an additional denominator unless the criterion's anchors
-                      demand it."
-                    </em>
+                    {suggestion.reasoning ||
+                      "(model returned no rationale — review the diff before applying.)"}
                   </div>
+                  <details className="mt-2">
+                    <summary
+                      className="cursor-pointer text-xs"
+                      style={{ color: "var(--accent)" }}
+                    >
+                      View suggested prompt
+                    </summary>
+                    <pre
+                      className="text-xs mt-1.5 p-2 whitespace-pre-wrap"
+                      style={{
+                        background: "var(--bg-elevated)",
+                        border: "1px solid var(--border)",
+                        borderRadius: "var(--radius-sm)",
+                        maxHeight: 240,
+                        overflow: "auto",
+                      }}
+                    >
+                      {suggestion.suggested_prompt}
+                    </pre>
+                  </details>
                   <div className="flex items-center gap-1.5 mt-2">
-                    <button className="btn btn-sm btn-primary">
+                    <button
+                      className="btn btn-sm btn-primary"
+                      onClick={() => setPrompt(suggestion.suggested_prompt)}
+                    >
                       Apply to prompt
                     </button>
-                    <button className="btn btn-sm">View full diff</button>
                     <button
                       className="btn btn-sm btn-ghost"
-                      onClick={() => setSuggested(false)}
+                      onClick={() => suggestMut.reset()}
                     >
                       Discard
                     </button>
@@ -988,9 +1054,19 @@ function CriterionEditor({
               </div>
 
               <div className="grid gap-2">
+                {lessons.length === 0 && (
+                  <div
+                    className="text-xs italic px-2 py-3"
+                    style={{ color: "var(--fg-faint)" }}
+                  >
+                    No disagreements found for this criterion on the parent
+                    iteration's dev split — there's nothing to teach v
+                    {toVersion} from yet. Score v{fromVersion} on dev first.
+                  </div>
+                )}
                 {lessons.map((l) => (
                   <div
-                    key={l.appId}
+                    key={l.application_id}
                     style={{
                       background: "var(--bg-elevated)",
                       border: "1px solid var(--border)",
@@ -1001,17 +1077,17 @@ function CriterionEditor({
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-2">
                         <span className="font-mono text-xs font-medium">
-                          {l.appId}
+                          {l.application_external_id}
                         </span>
                         <span className="pill text-[10px]">
-                          LLM <strong>{l.llm}</strong>
+                          LLM <strong>{l.llm_score}</strong>
                           <span
                             className="mx-1"
                             style={{ color: "var(--fg-faint)" }}
                           >
                             vs human
                           </span>
-                          <strong>{l.human}</strong>
+                          <strong>{l.human_median}</strong>
                         </span>
                       </div>
                       <button
@@ -1025,7 +1101,7 @@ function CriterionEditor({
                       className="text-xs leading-relaxed"
                       style={{ color: "var(--fg-muted)" }}
                     >
-                      {l.reason}
+                      {l.llm_reasoning ?? l.excerpt}
                     </div>
                   </div>
                 ))}
@@ -1099,18 +1175,35 @@ function CriterionEditor({
                       <th style={{ width: 40 }}></th>
                       <th>Application</th>
                       <th>Source</th>
-                      <th>Score</th>
-                      <th>Δ vs v{fromVersion}</th>
+                      <th>Human score</th>
                       <th></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {MOCK_EXAMPLES.map((ex) => (
-                      <tr key={ex.app}>
-                        <td>
-                          <Toggle on={ex.on} />
+                    {examples.length === 0 && (
+                      <tr>
+                        <td colSpan={5}>
+                          <div
+                            className="text-xs italic px-3 py-3"
+                            style={{ color: "var(--fg-faint)" }}
+                          >
+                            {examplesQ.isLoading
+                              ? "Loading…"
+                              : "No calibration examples for this criterion yet. Generate them from disagreements once v" +
+                                fromVersion +
+                                " is scored."}
+                          </div>
                         </td>
-                        <td className="font-mono text-xs">{ex.app}</td>
+                      </tr>
+                    )}
+                    {examples.map((ex) => (
+                      <tr key={ex.id}>
+                        <td>
+                          <Toggle on={ex.is_active} />
+                        </td>
+                        <td className="font-mono text-xs">
+                          {ex.application_external_id}
+                        </td>
                         <td>
                           <span
                             className={`pill ${
@@ -1125,20 +1218,13 @@ function CriterionEditor({
                           </span>
                         </td>
                         <td className="[font-variant-numeric:tabular-nums]">
-                          {ex.score}
-                        </td>
-                        <td className="[font-variant-numeric:tabular-nums]">
-                          {ex.delta === 0 ? (
-                            <span style={{ color: "var(--fg-faint)" }}>—</span>
-                          ) : (
-                            <span style={{ color: "var(--fg-muted)" }}>
-                              {ex.delta > 0 ? "+" : ""}
-                              {ex.delta}
-                            </span>
-                          )}
+                          {ex.human_score}
                         </td>
                         <td>
-                          <button className="btn btn-sm btn-ghost">
+                          <button
+                            className="btn btn-sm btn-ghost"
+                            title={ex.synthesized_reasoning}
+                          >
                             <Eye className="w-2.5 h-2.5" />
                           </button>
                         </td>

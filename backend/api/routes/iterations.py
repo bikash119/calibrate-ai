@@ -16,8 +16,11 @@ from api.schemas import (
     IterationItem,
     IterationsListResponse,
     IterationStatusUpdateRequest,
+    PromptSuggestionRequest,
+    PromptSuggestionResponse,
 )
 from api.services.iteration_service import IterationService
+from api.services.prompt_suggestion_service import suggest_refined_prompt
 
 logger = logging.getLogger("scoring_ai.routes.iterations")
 
@@ -125,6 +128,37 @@ def get_iteration(
         return _detail_response(IterationService(), project_id, iteration_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post(
+    "/iterations/{iteration_id}/criteria/{criterion_id}/suggest-prompt",
+    response_model=PromptSuggestionResponse,
+)
+def suggest_prompt(
+    project_id: int,
+    iteration_id: int,
+    criterion_id: int,
+    body: PromptSuggestionRequest,
+    current_user: dict = Depends(get_current_user),
+) -> PromptSuggestionResponse:
+    """Draft a refined system prompt for one criterion using the parent
+    iteration's flagged disagreements as teaching signal.
+
+    Synchronous LLM call — fast (single completion), so no background task.
+    The operator reviews the result and decides whether to apply it.
+    """
+    try:
+        result = suggest_refined_prompt(
+            project_id, iteration_id, criterion_id, int(current_user["sub"]),
+            current_prompt=body.current_prompt,
+            lesson_cap=body.lesson_cap,
+        )
+    except ValueError as e:
+        msg = str(e).lower()
+        if "not found" in msg:
+            raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    return PromptSuggestionResponse(**result)
 
 
 @router.get("/iterations/{from_version}/diff/{to_version}", response_model=DiffResponse)

@@ -449,6 +449,21 @@ class IterationStatusUpdateRequest(BaseModel):
     status: str    # 'draft' | 'active' | 'abandoned'
 
 
+class PromptSuggestionRequest(BaseModel):
+    """POST /api/projects/{pid}/iterations/{iid}/criteria/{cid}/suggest-prompt.
+
+    `current_prompt` is the operator's working draft (in the textarea). When
+    omitted, the service falls back to the parent iteration's stored prompt
+    for the criterion."""
+    current_prompt: str | None = None
+    lesson_cap: int = 5
+
+
+class PromptSuggestionResponse(BaseModel):
+    suggested_prompt: str
+    reasoning: str
+
+
 class IterationCriterionMetric(BaseModel):
     """One criterion's QWK for one iteration on one split (for table display)."""
     criterion_id: int

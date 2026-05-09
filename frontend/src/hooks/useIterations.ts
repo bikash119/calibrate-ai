@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { z } from "zod";
 
 import { apiFetch } from "../api/client";
 import {
@@ -99,5 +100,39 @@ export function useDiff(
       fromVersion !== undefined &&
       toVersion !== undefined &&
       fromVersion !== toVersion,
+  });
+}
+
+// ------------------------------------------------------------------ //
+// Auto-suggest refined prompt
+// ------------------------------------------------------------------ //
+
+const PromptSuggestionSchema = z.object({
+  suggested_prompt: z.string(),
+  reasoning: z.string(),
+});
+export type PromptSuggestion = z.infer<typeof PromptSuggestionSchema>;
+
+interface SuggestPromptArgs {
+  iterationId: number;
+  criterionId: number;
+  currentPrompt: string;
+  lessonCap?: number;
+}
+
+export function useSuggestPrompt(projectId: number) {
+  return useMutation<PromptSuggestion, Error, SuggestPromptArgs>({
+    mutationFn: ({ iterationId, criterionId, currentPrompt, lessonCap }) =>
+      apiFetch(
+        `/projects/${projectId}/iterations/${iterationId}/criteria/${criterionId}/suggest-prompt`,
+        PromptSuggestionSchema,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            current_prompt: currentPrompt,
+            lesson_cap: lessonCap ?? 5,
+          }),
+        },
+      ),
   });
 }
