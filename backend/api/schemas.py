@@ -4,11 +4,47 @@ Conventions:
 - *CreateRequest, *UpdateRequest for POST/PUT bodies
 - *Item for list elements
 - *Response for top-level response bodies
-- Timestamps are str (ISO 8601), never datetime
+- Timestamps are str (ISO 8601 with Z suffix), never datetime — see UtcTimestamp
 - Derived/computed fields (counts, medians, latest metrics) are documented inline
 """
 
-from pydantic import BaseModel
+from typing import Annotated, Any
+
+from pydantic import BaseModel, BeforeValidator
+
+
+def _to_iso_utc(v: Any) -> Any:
+    """Coerce a timestamp string to ISO 8601 with explicit Z suffix.
+
+    SQLite's CURRENT_TIMESTAMP emits 'YYYY-MM-DD HH:MM:SS' (UTC, no
+    timezone marker). Browsers parse that as *local* time, which throws
+    "computed 6 hours ago" badges on a fresh compute. Normalizing every
+    timestamp the API emits to 'YYYY-MM-DDTHH:MM:SSZ' makes downstream
+    `new Date(...)` parse it as UTC consistently.
+
+    Pass-through for None and already-tagged values (with `Z` or `+HH:MM`
+    offset). Idempotent — safe to apply twice.
+    """
+    if v is None:
+        return None
+    s = str(v)
+    if not s:
+        return s
+    # Already has a timezone marker — leave it alone.
+    if s.endswith("Z") or s.endswith("z"):
+        return s
+    # Look for a `+HH:MM` / `-HH:MM` offset after the date portion.
+    if len(s) >= 20 and (s[19] == "+" or s[19] == "-"):
+        return s
+    # SQLite default uses a space separator instead of `T`. Normalize.
+    if " " in s and "T" not in s:
+        s = s.replace(" ", "T", 1)
+    return s + "Z"
+
+
+# Field type for any timestamp surfaced by the API. Use everywhere instead of
+# bare `str` so the SQLite-to-ISO normalization happens automatically.
+UtcTimestamp = Annotated[str, BeforeValidator(_to_iso_utc)]
 
 
 # ============================================================
@@ -63,8 +99,8 @@ class ProgramItem(BaseModel):
     name: str
     description: str | None = None
     project_count: int            # derived
-    created_at: str | None = None
-    updated_at: str | None = None
+    created_at: UtcTimestamp | None = None
+    updated_at: UtcTimestamp | None = None
 
 
 class ProgramsListResponse(BaseModel):
@@ -115,8 +151,8 @@ class ProjectItem(BaseModel):
     iteration_count: int          # derived: COUNT(iterations) for this project
     latest_dev_qwk: float | None = None      # derived: latest iteration's dev-split overall QWK
     hh_baseline_qwk: float | None = None     # derived: project-overall H-H QWK if computed
-    created_at: str | None = None
-    updated_at: str | None = None
+    created_at: UtcTimestamp | None = None
+    updated_at: UtcTimestamp | None = None
 
 
 class ProjectDetailResponse(BaseModel):
@@ -134,8 +170,8 @@ class ProjectDetailResponse(BaseModel):
     iteration_count: int          # derived
     has_locked_prompt: bool       # derived
     created_by: int | None = None
-    created_at: str | None = None
-    updated_at: str | None = None
+    created_at: UtcTimestamp | None = None
+    updated_at: UtcTimestamp | None = None
 
 
 class ProjectsListResponse(BaseModel):
@@ -196,11 +232,39 @@ class RubricExtractTextRequest(BaseModel):
     text: str
 
 
+class ExtractedCriterion(CriterionInput):
+    """Criterion as returned by /rubric/extract-* endpoints.
+
+    Same shape as CriterionInput plus binder diagnostics: the LLM may
+    extract question references the binder couldn't resolve to actual
+    `questions.key` values. The UI surfaces these as warnings; they're
+    not persisted on save (only the resolved keys go into CriterionInput).
+    """
+    unbound_feeding_refs: list[str] = []
+    unbound_weighted_refs: list[str] = []
+
+
 class RubricExtractResponse(BaseModel):
     """Either /extract endpoint returns this. The UI uses the returned
     `criteria` to seed its inline rubric editor, then the operator reviews
     and saves via PUT /rubric."""
-    criteria: list[CriterionInput]
+    criteria: list[ExtractedCriterion]
+
+
+class PromptPreviewResponse(BaseModel):
+    """GET /api/projects/{id}/criteria/{criterion_id}/prompt-preview.
+
+    Renders the actual system + user prompts that production scoring would
+    build for a (criterion, application) pair. Debug aid for the rubric
+    editor — operators can verify their rubric translates into reasonable
+    prompts before kicking off a scoring job. `user_prompt` is null when
+    the project has no applications imported yet."""
+    criterion_id: int
+    criterion_name: str
+    application_id: int | None
+    application_external_id: str | None
+    system_prompt: str
+    user_prompt: str | None
 
 
 # ============================================================
@@ -241,7 +305,7 @@ class ApplicationItem(BaseModel):
     id: int
     external_id: str
     has_human_scores: bool        # derived
-    created_at: str | None = None
+    created_at: UtcTimestamp | None = None
 
 
 class ApplicationDetail(BaseModel):
@@ -251,7 +315,7 @@ class ApplicationDetail(BaseModel):
     external_id: str
     answers: dict[str, str]       # {question.key: answer text}
     metadata: dict[str, str] | None = None
-    created_at: str | None = None
+    created_at: UtcTimestamp | None = None
 
 
 class ApplicationsResponse(BaseModel):
@@ -314,7 +378,7 @@ class HumanScoreItem(BaseModel):
     criterion_id: int
     evaluator_id: str
     score: int
-    created_at: str | None = None
+    created_at: UtcTimestamp | None = None
 
 
 class HumanScoresResponse(BaseModel):
@@ -388,7 +452,7 @@ class IterationItem(BaseModel):
     validation_metrics: list[IterationCriterionMetric] = []  # derived
     overall_dev_qwk: float | None = None                  # derived
     overall_validation_qwk: float | None = None           # derived
-    created_at: str | None = None
+    created_at: UtcTimestamp | None = None
 
 
 class IterationDetailResponse(BaseModel):
@@ -400,7 +464,7 @@ class IterationDetailResponse(BaseModel):
     prompts: list[CriterionPromptItem]
     dev_metrics: list[IterationCriterionMetric] = []
     validation_metrics: list[IterationCriterionMetric] = []
-    created_at: str | None = None
+    created_at: UtcTimestamp | None = None
 
 
 class IterationsListResponse(BaseModel):
@@ -456,9 +520,9 @@ class ScoringJobItem(BaseModel):
     model: str
     cost_estimate_usd: float | None = None
     cost_actual_usd: float | None = None
-    started_at: str | None = None
-    completed_at: str | None = None
-    created_at: str | None = None
+    started_at: UtcTimestamp | None = None
+    completed_at: UtcTimestamp | None = None
+    created_at: UtcTimestamp | None = None
 
 
 class ScoringJobsResponse(BaseModel):
@@ -491,7 +555,7 @@ class LlmScoreItem(BaseModel):
     criterion_name: str           # denormalized for display
     score: int
     reasoning: str | None = None
-    created_at: str | None = None
+    created_at: UtcTimestamp | None = None
 
 
 class JobScoresResponse(BaseModel):
@@ -521,7 +585,7 @@ class AgreementMetricItem(BaseModel):
     ci_low: float | None = None
     ci_high: float | None = None
     n: int | None = None
-    computed_at: str | None = None
+    computed_at: UtcTimestamp | None = None
 
 
 class BaselineResponse(BaseModel):
@@ -599,7 +663,7 @@ class CalibrationExampleItem(BaseModel):
     source: str                   # 'operator_flagged' | 'evaluator_consensus' | 'auto' | 'manual'
     is_active: bool
     sort_order: int
-    created_at: str | None = None
+    created_at: UtcTimestamp | None = None
 
 
 class CalibrationExamplesResponse(BaseModel):
@@ -639,7 +703,7 @@ class LockedPromptItem(BaseModel):
     provider: str
     model: str
     locked_by: int | None = None
-    locked_at: str | None = None
+    locked_at: UtcTimestamp | None = None
 
 
 class LockedPromptDetailResponse(BaseModel):
@@ -656,7 +720,7 @@ class LockedPromptDetailResponse(BaseModel):
     examples_snapshot: list[dict] | None = None
     test_metrics: dict             # {'llm_h_test': [...], 'hh_baseline': [...]}, JSON-decoded
     locked_by: int | None = None
-    locked_at: str | None = None
+    locked_at: UtcTimestamp | None = None
 
 
 class LockedPromptsListResponse(BaseModel):
@@ -678,7 +742,7 @@ class AuditEntryItem(BaseModel):
     entity_id: int | None = None
     action: str
     details: dict | None = None       # JSON-decoded for client convenience
-    created_at: str | None = None
+    created_at: UtcTimestamp | None = None
 
 
 class AuditLogResponse(BaseModel):
