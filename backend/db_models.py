@@ -854,6 +854,26 @@ class ScoringJobRepository:
             )
             return [ScoringJob(**dict(row)) for row in cursor.fetchall()]
 
+    def get_latest_completed(
+        self,
+        iteration_id: int,
+        split: str,
+    ) -> ScoringJob | None:
+        """Most recent successfully-completed job for an iteration on a split.
+
+        Used by the overlay path to find the source of truth for inherited
+        criterion scores when scoring v(N+1) on the same split.
+        """
+        with get_db_cursor() as cursor:
+            cursor.execute(
+                """SELECT * FROM scoring_jobs
+                   WHERE iteration_id = ? AND split = ? AND status = 'completed'
+                   ORDER BY completed_at DESC, created_at DESC LIMIT 1""",
+                (iteration_id, split),
+            )
+            row = cursor.fetchone()
+            return ScoringJob(**dict(row)) if row else None
+
     def get_by_batch_external_id(self, batch_external_id: str) -> ScoringJob | None:
         with get_db_cursor() as cursor:
             cursor.execute(
@@ -902,6 +922,15 @@ class ScoringJobRepository:
             cursor.execute(
                 "UPDATE scoring_jobs SET progress_current = ? WHERE id = ?",
                 (current, job_id),
+            )
+
+    def update_progress_total(self, job_id: int, total: int) -> None:
+        """Adjust the denominator. Used by the overlay-scoring path once it
+        knows how many criterion-app pairs actually need fresh LLM calls."""
+        with get_db_cursor() as cursor:
+            cursor.execute(
+                "UPDATE scoring_jobs SET progress_total = ? WHERE id = ?",
+                (total, job_id),
             )
 
     def update_cost_actual(self, job_id: int, cost_usd: float) -> None:
@@ -969,6 +998,34 @@ class LlmScoreRepository:
                     (s.job_id, s.application_id, s.criterion_id, s.score, s.reasoning, s.raw_response)
                     for s in scores
                 ],
+            )
+            return cursor.rowcount
+
+    def copy_for_criteria(
+        self,
+        source_job_id: int,
+        target_job_id: int,
+        criterion_ids: list[int],
+    ) -> int:
+        """Copy llm_scores rows from one job to another for a set of criteria.
+
+        Used by the per-criterion overlay path: when v(N+1) inherits a
+        criterion from v(N), the worker can copy v(N)'s scores under the
+        new job_id instead of re-running the LLM.
+
+        Returns the number of rows copied.
+        """
+        if not criterion_ids:
+            return 0
+        placeholders = ",".join("?" for _ in criterion_ids)
+        with get_db_cursor() as cursor:
+            cursor.execute(
+                f"""INSERT INTO llm_scores
+                    (job_id, application_id, criterion_id, score, reasoning, raw_response)
+                    SELECT ?, application_id, criterion_id, score, reasoning, raw_response
+                    FROM llm_scores
+                    WHERE job_id = ? AND criterion_id IN ({placeholders})""",
+                (target_job_id, source_job_id, *criterion_ids),
             )
             return cursor.rowcount
 

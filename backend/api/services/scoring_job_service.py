@@ -241,6 +241,12 @@ def run_scoring_job(job_id: int) -> None:
     iter_prompt_repo = IterationPromptRepository()
     prompts_by_crit = iter_prompt_repo.get_as_dict(job.iteration_id)
 
+    iteration_repo = IterationRepository()
+    iteration = iteration_repo.get_by_id(job.iteration_id)
+    if iteration is None:
+        job_repo.update_status(job_id, "failed", error_message="Iteration disappeared")
+        return
+
     criteria_repo = CriteriaRepository()
     criteria = criteria_repo.get_by_project(job.project_id)
     if not criteria:
@@ -261,8 +267,50 @@ def run_scoring_job(job_id: int) -> None:
         app_ids = split_repo.get_application_ids(job.project_id, job.split)
     apps_by_id = {a.id: a for a in app_repo.get_by_project(job.project_id) if a.id in set(app_ids)}
 
+    # ------------------------------------------------------------------ #
+    # Per-criterion overlay: inherited criteria copy llm_scores from the
+    # parent iteration's most recent completed job on the same split.
+    # ------------------------------------------------------------------ #
+    edited_ids = set(json.loads(iteration.edited_criterion_ids_json or "[]"))
+    inherited_ids: list[int] = []
+    inherited_count = 0
+    if iteration.parent_iteration_id is not None and edited_ids:
+        parent_job = job_repo.get_latest_completed(
+            iteration.parent_iteration_id, job.split,
+        )
+        if parent_job is not None:
+            inherited_ids = [c.id for c in criteria if c.id not in edited_ids]
+            if inherited_ids:
+                inherited_count = score_repo.copy_for_criteria(
+                    parent_job.id, job_id, inherited_ids,
+                )
+                logger.info(
+                    "Job %d: copied %d inherited llm_scores from parent job %d "
+                    "for criteria %s",
+                    job_id, inherited_count, parent_job.id, sorted(inherited_ids),
+                )
+        else:
+            logger.info(
+                "Job %d: parent iteration %d has no completed job on split '%s' — "
+                "scoring all criteria fresh",
+                job_id, iteration.parent_iteration_id, job.split,
+            )
+
+    # Score fresh for: criteria not in inherited_ids. When there's no
+    # overlay (v1, no parent, or no parent job), inherited_ids is empty
+    # and every criterion gets scored, matching legacy behavior.
+    inherited_set = set(inherited_ids)
+    fresh_criteria = [c for c in criteria if c.id not in inherited_set]
+    fresh_total = len(app_ids) * len(fresh_criteria)
+    # Update progress_total now that we know exactly how many fresh calls
+    # the job will make (the original estimate at submit time was over-counting).
     job_repo.update_status(job_id, "running")
-    logger.info("Job %d running: %d apps × %d criteria", job_id, len(app_ids), len(criteria))
+    if fresh_total != job.progress_total:
+        job_repo.update_progress_total(job_id, fresh_total)
+    logger.info(
+        "Job %d running: %d apps × %d criteria fresh (+ %d inherited copied)",
+        job_id, len(app_ids), len(fresh_criteria), inherited_count,
+    )
 
     try:
         # Honor the provider/model the job was created with, not whatever
@@ -280,7 +328,7 @@ def run_scoring_job(job_id: int) -> None:
                 logger.info("Job %d cancelled mid-run at progress %d", job_id, progress)
                 return
 
-            for crit in criteria:
+            for crit in fresh_criteria:
                 system_prompt = prompts_by_crit.get(crit.id)
                 if system_prompt is None:
                     raise RuntimeError(f"Iteration is missing a prompt for criterion {crit.id}")
@@ -301,7 +349,10 @@ def run_scoring_job(job_id: int) -> None:
                 job_repo.update_progress(job_id, progress)
 
         job_repo.update_status(job_id, "completed")
-        logger.info("Job %d completed (%d scores)", job_id, progress)
+        logger.info(
+            "Job %d completed (%d fresh + %d inherited = %d scores)",
+            job_id, progress, inherited_count, progress + inherited_count,
+        )
 
     except Exception as e:
         logger.exception("Job %d failed: %s", job_id, e)

@@ -212,7 +212,8 @@ CREATE TABLE IF NOT EXISTS iterations (
     UNIQUE(project_id, version)
 );
 CREATE INDEX IF NOT EXISTS idx_iterations_project ON iterations(project_id);
-CREATE INDEX IF NOT EXISTS idx_iterations_parent ON iterations(parent_iteration_id);
+-- idx_iterations_parent is created in _apply_forward_migrations: legacy DBs
+-- need the column added before the index can reference it.
 
 CREATE TABLE IF NOT EXISTS iteration_prompts (
     iteration_id INTEGER NOT NULL REFERENCES iterations(id) ON DELETE CASCADE,
@@ -384,10 +385,12 @@ def _apply_forward_migrations(cursor) -> None:
             "ALTER TABLE iterations ADD COLUMN parent_iteration_id INTEGER "
             "REFERENCES iterations(id) ON DELETE SET NULL"
         )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_iterations_parent "
-            "ON iterations(parent_iteration_id)"
-        )
+    # Create the index unconditionally (idempotent). Fresh DBs need this
+    # too, since the schema script no longer creates it.
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_iterations_parent "
+        "ON iterations(parent_iteration_id)"
+    )
     if not has_column("iterations", "edited_criterion_ids_json"):
         cursor.execute(
             "ALTER TABLE iterations ADD COLUMN edited_criterion_ids_json "
