@@ -30,7 +30,10 @@ You are an expert evaluator scoring an application against a single criterion.
 {description}
 
 # Scoring scale
-Assign an integer score from {scale_min} to {scale_max}.
+Assign an integer score from {scale_min} to {scale_max} (higher is better).
+
+# Score anchors for this criterion
+What each score level means for '{name}', specifically:
 {anchor_block}
 
 {guidance_block}\
@@ -41,6 +44,7 @@ Return ONLY a valid JSON object — no markdown, no preamble:
 # Rules
 - Score on substance only. Ignore writing style, length, polish, and demographics.
 - Cite specific evidence from the answers in your reasoning.
+- Match your score to the anchor whose description best fits the evidence — do not interpolate.
 - If the application contains no information relevant to this criterion, assign {scale_min} and say so.
 - Reason in English regardless of the application's original language.\
 """
@@ -61,7 +65,7 @@ def build_system_prompt(
 
     anchor_lines = "\n".join(
         f"- {k}: {anchors[k]}"
-        for k in sorted(anchors.keys(), key=_anchor_sort_key)
+        for k in sorted(anchors.keys(), key=_anchor_sort_key, reverse=True)
     )
 
     guidance_parts: list[str] = []
