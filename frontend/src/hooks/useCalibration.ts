@@ -3,7 +3,9 @@ import { z } from "zod";
 
 import { apiFetch } from "../api/client";
 import {
+  CalibrationExampleItemSchema,
   CalibrationExamplesResponseSchema,
+  type CalibrationExampleItem,
   type CalibrationExamplesResponse,
 } from "../schemas";
 
@@ -39,6 +41,47 @@ export function useGenerateCalibrationExamples(projectId: number, criterionId: n
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["calibrationExamples", projectId, criterionId] });
+    },
+  });
+}
+
+interface PromoteCalibrationExampleArgs {
+  applicationId: number;
+  humanScore: number;
+  /** 'operator_flagged' for promoted disagreements, 'manual' for promoted
+   *  agreements. Other values get rejected by the backend. */
+  source: "operator_flagged" | "manual";
+}
+
+/** Promote one (criterion, application) pair to a calibration example.
+ *  Insertion is non-destructive: existing active examples stay. */
+export function usePromoteCalibrationExample(
+  projectId: number,
+  criterionId: number,
+) {
+  const qc = useQueryClient();
+  return useMutation<
+    CalibrationExampleItem,
+    Error,
+    PromoteCalibrationExampleArgs
+  >({
+    mutationFn: ({ applicationId, humanScore, source }) =>
+      apiFetch(
+        `/projects/${projectId}/criteria/${criterionId}/calibration-examples/promote`,
+        CalibrationExampleItemSchema,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            application_id: applicationId,
+            human_score: humanScore,
+            source,
+          }),
+        },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({
+        queryKey: ["calibrationExamples", projectId, criterionId],
+      });
     },
   });
 }

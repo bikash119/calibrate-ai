@@ -10,6 +10,7 @@ from api.schemas import (
     CalibrationExampleItem,
     CalibrationExampleSetActiveRequest,
     CalibrationExamplesResponse,
+    PromoteCalibrationExampleRequest,
 )
 from api.services.calibration_service import CalibrationService
 
@@ -42,6 +43,37 @@ def list_examples(
         criterion_id=criterion_id,
         examples=[CalibrationExampleItem(**e) for e in examples],
     )
+
+
+@criterion_router.post(
+    "/calibration-examples/promote",
+    response_model=CalibrationExampleItem,
+    status_code=201,
+)
+def promote_example(
+    project_id: int,
+    criterion_id: int,
+    body: PromoteCalibrationExampleRequest,
+    current_user: dict = Depends(get_current_user),
+) -> CalibrationExampleItem:
+    """Promote one (criterion, application) pair to a calibration example.
+
+    Inserts a new row with `is_active=1` and LLM-generated reasoning.
+    Used by the SelectExamplesModal in the create-iteration flow."""
+    try:
+        example = CalibrationService().promote_single(
+            project_id,
+            criterion_id,
+            body.application_id,
+            body.human_score,
+            body.source,
+            int(current_user["sub"]),
+        )
+    except ValueError as e:
+        if "not found" in str(e).lower():
+            raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    return CalibrationExampleItem(**example)
 
 
 @criterion_router.post(

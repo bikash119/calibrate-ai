@@ -11,16 +11,20 @@ import { z } from "zod";
 
 const VoidSchema = z.unknown();
 
+export type ComparisonKind = "disagreement" | "agreement" | "all";
+
 export function useDisagreements(
   projectId: number | undefined,
   iterationId: number | undefined,
   split: string,
+  options: { kind?: ComparisonKind } = {},
 ) {
+  const kind = options.kind ?? "disagreement";
   return useQuery<DisagreementsResponse>({
-    queryKey: ["disagreements", projectId, iterationId, split],
+    queryKey: ["disagreements", projectId, iterationId, split, kind],
     queryFn: () =>
       apiFetch(
-        `/projects/${projectId}/iterations/${iterationId}/disagreements?split=${split}`,
+        `/projects/${projectId}/iterations/${iterationId}/disagreements?split=${split}&kind=${kind}`,
         DisagreementsResponseSchema,
       ),
     enabled: projectId !== undefined && iterationId !== undefined,

@@ -1258,6 +1258,27 @@ class CalibrationExampleRepository:
                 (1 if is_active else 0, example_id),
             )
 
+    def create(self, ex: CalibrationExample) -> int:
+        """Insert one calibration example. Used by the per-row promotion
+        flow (operator picks a single disagreement / agreement to add as a
+        few-shot anchor) — non-destructive, unlike replace_for_criterion.
+
+        Returns the new row's id."""
+        with get_db_cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO calibration_examples
+                   (project_id, criterion_id, application_id, human_score,
+                    synthesized_reasoning, condensed_answers_json, source,
+                    is_active, sort_order)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    ex.project_id, ex.criterion_id, ex.application_id, ex.human_score,
+                    ex.synthesized_reasoning, ex.condensed_answers_json, ex.source,
+                    ex.is_active, ex.sort_order,
+                ),
+            )
+            return cursor.lastrowid
+
 
 # ============================================================
 # Output: locked prompts (immutable artifact)

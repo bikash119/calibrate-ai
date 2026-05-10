@@ -19,13 +19,11 @@ import {
 import { useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
-  ArrowRight,
   Check,
   ChevronDown,
   ChevronRight,
   Eye,
   FileText,
-  Flag,
   Info,
   Layers,
   Pencil,
@@ -40,8 +38,8 @@ import { PageHead } from "../components/ui/PageHead";
 import {
   TrafficLight,
   trafficStatusFor,
-  type TrafficStatus,
 } from "../components/ui/TrafficLight";
+import { SelectExamplesModal } from "../features/iterate/SelectExamplesModal";
 import { useBaseline } from "../hooks/useBaseline";
 import { useCalibrationExamples } from "../hooks/useCalibration";
 import { useDisagreements } from "../hooks/useDisagreements";
@@ -52,7 +50,7 @@ import {
   useSuggestPrompt,
 } from "../hooks/useIterations";
 import { useRubric } from "../hooks/useRubric";
-import type { DisagreementItem } from "../schemas";
+import type { CalibrationExampleItem, DisagreementItem } from "../schemas";
 
 // ------------------------------------------------------------------ //
 
@@ -103,6 +101,16 @@ export function CreateIterationPage() {
     }
     return map;
   }, [parentDetail.data]);
+  // The actual system prompt v(N) used for each criterion. This is what
+  // the LLM sees at scoring time — the operator's textarea default should
+  // match it so they're editing the real thing, not a placeholder.
+  const parentPromptByCriterion = useMemo(() => {
+    const map: Record<number, string> = {};
+    for (const p of parentDetail.data?.prompts ?? []) {
+      map[p.criterion_id] = p.system_prompt;
+    }
+    return map;
+  }, [parentDetail.data]);
   const disagreementsByCriterion = useMemo(() => {
     const map: Record<number, DisagreementItem[]> = {};
     for (const d of parentDisagreements.data?.disagreements ?? []) {
@@ -140,9 +148,17 @@ export function CreateIterationPage() {
 
   // ---- form state -------------------------------------------------- //
 
-  // Default-empty so the operator must explicitly pick.
-  const [edited, setEdited] = useState<Record<number, boolean>>({});
-  const [expanded, setExpanded] = useState<number | null>(null);
+  // Multi-open accordions — each editor toggles independently. Default
+  // all closed so the page is short on first paint; the operator opens
+  // whichever criteria they want to work on.
+  const [openIds, setOpenIds] = useState<Set<number>>(() => new Set());
+  const toggleOpen = (id: number) =>
+    setOpenIds((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const [postCreate, setPostCreate] = useState({
     scoreDev: false,
     computeMetrics: true,
@@ -154,8 +170,17 @@ export function CreateIterationPage() {
   const [devSampleSize, setDevSampleSize] = useState(247);
   const [lessonCap, setLessonCap] = useState(5);
 
-  const editedIds = criteria.filter((c) => edited[c.id]).map((c) => c.id);
-  const reusedIds = criteria.filter((c) => !edited[c.id]).map((c) => c.id);
+  // Auto-detect "edited" by comparing the operator's textarea text to the
+  // parent iteration's stored prompt. Empty / unchanged → inherited.
+  const editedIds = criteria
+    .map((c) => c.id)
+    .filter((id) => {
+      const text = editedPromptText[id];
+      if (text === undefined) return false;
+      const parent = parentPromptByCriterion[id] ?? "";
+      return text.trim() !== "" && text !== parent;
+    });
+  const reusedIds = criteria.filter((c) => !editedIds.includes(c.id)).map((c) => c.id);
 
   // ---- cost estimate ---------------------------------------------- //
   const callsPerCriterion = devSampleSize;
@@ -164,20 +189,9 @@ export function CreateIterationPage() {
   const estCost = totalCalls * costPerCall;
   const reusedSavings = reusedIds.length * callsPerCriterion * costPerCall;
 
-  // Auto-expand the first edited criterion if nothing is currently expanded.
-  if (expanded == null && editedIds.length > 0) {
-    // Read-only effect simulated by initializing from state in render. To
-    // avoid a setState in render, just compute the desired expanded id —
-    // we set it inside the toggle callbacks below.
-  }
-  const effectiveExpanded =
-    expanded ?? (editedIds.length > 0 ? editedIds[0] : null);
 
   const submitIteration = async (asDraft: boolean) => {
     if (editedIds.length === 0 || projectId == null) return;
-    // Default-prompt fallback used when the operator marked a criterion as
-    // edited but didn't touch the textarea. Backend will auto-generate when
-    // we send no prompt for that criterion.
     const promptsBody = editedIds
       .filter((id) => editedPromptText[id] && editedPromptText[id]!.trim())
       .map((id) => ({
@@ -220,197 +234,71 @@ export function CreateIterationPage() {
       >
         {/* ============== LEFT: form ============== */}
         <div className="grid gap-4">
-          {/* SCOPE ------------------------------------------------------ */}
-          <Card
-            title="1. Scope"
-            desc="Which criteria are you editing this round?"
-            action={
-              <div className="flex items-center gap-1.5">
-                <button
-                  className="btn btn-sm btn-ghost"
-                  onClick={() =>
-                    setEdited(
-                      Object.fromEntries(criteria.map((c) => [c.id, true])),
-                    )
-                  }
-                >
-                  Select all
-                </button>
-                <button
-                  className="btn btn-sm btn-ghost"
-                  onClick={() => setEdited({})}
-                >
-                  Clear
-                </button>
-              </div>
-            }
-          >
-            {criteria.length === 0 ? (
-              <div className="text-sm text-[var(--fg-muted)]">
-                No criteria yet — save the rubric first.
-              </div>
-            ) : (
-              <div
-                className="grid gap-2.5"
-                style={{
-                  gridTemplateColumns: `repeat(${Math.min(
-                    5,
-                    Math.max(1, criteria.length),
-                  )}, minmax(0, 1fr))`,
-                }}
-              >
-                {criteria.map((c) => {
-                  const status: TrafficStatus = trafficStatusFor(c.llmH, {
-                    qwkLow: c.qwkLow,
-                  });
-                  const isEdited = !!edited[c.id];
-                  return (
-                    <button
-                      key={c.id}
-                      onClick={() =>
-                        setEdited((e) => ({ ...e, [c.id]: !e[c.id] }))
-                      }
-                      style={{
-                        textAlign: "left",
-                        background: isEdited
-                          ? "var(--accent-bg)"
-                          : "var(--bg-elevated)",
-                        border: `1.5px solid ${
-                          isEdited ? "var(--accent)" : "var(--border)"
-                        }`,
-                        borderRadius: "var(--radius-md)",
-                        padding: 12,
-                        cursor: "pointer",
-                        transition: "border-color 80ms ease",
-                        position: "relative",
-                      }}
-                    >
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span
-                          className="font-mono text-[11px]"
-                          style={{ color: "var(--fg-muted)" }}
-                        >
-                          Crit {c.id}
-                        </span>
-                        <span
-                          style={{
-                            width: 14,
-                            height: 14,
-                            borderRadius: 3,
-                            border: `1.5px solid ${
-                              isEdited
-                                ? "var(--accent)"
-                                : "var(--border-strong)"
-                            }`,
-                            background: isEdited ? "var(--accent)" : "transparent",
-                            display: "grid",
-                            placeItems: "center",
-                          }}
-                        >
-                          {isEdited && (
-                            <Check
-                              size={9}
-                              strokeWidth={3}
-                              style={{ color: "var(--accent-fg, white)" }}
-                            />
-                          )}
-                        </span>
-                      </div>
-                      <div
-                        className="text-xs font-medium leading-snug mb-2"
-                        style={{ minHeight: 32 }}
-                        title={c.name}
-                      >
-                        {c.name}
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <TrafficLight status={status} />
-                        <span className="text-[11px] [font-variant-numeric:tabular-nums]">
-                          {c.llmH.toFixed(2)}
-                        </span>
-                        <span
-                          className="text-[10px] [font-variant-numeric:tabular-nums]"
-                          style={{ color: "var(--fg-faint)" }}
-                        >
-                          / {c.qwk.toFixed(2)}
-                        </span>
-                      </div>
-                      {!isEdited && (
-                        <div
-                          className="text-[10px] mt-1.5 italic"
-                          style={{ color: "var(--fg-faint)" }}
-                        >
-                          reused from v{fromVersion}
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            <div
-              className="mt-3.5 px-3 py-2.5 text-xs flex flex-wrap gap-4"
-              style={{
-                background: "var(--bg-sunken)",
-                borderRadius: "var(--radius-sm)",
-              }}
-            >
-              <div>
-                <span style={{ color: "var(--fg-muted)" }}>Editing</span>{" "}
-                <strong>{editedIds.length}</strong>{" "}
-                <span style={{ color: "var(--fg-faint)" }}>
-                  / {criteria.length}
-                </span>
-              </div>
-              <div>
-                <span style={{ color: "var(--fg-muted)" }}>
-                  Reusing v{fromVersion} scores for
-                </span>{" "}
-                <strong>{reusedIds.length}</strong>{" "}
-                <span style={{ color: "var(--fg-muted)" }}>criteria</span>
-                <span className="mx-2" style={{ color: "var(--fg-faint)" }}>
-                  ·
-                </span>
-                <span style={{ color: "var(--fg-muted)" }}>saves</span>{" "}
-                <strong className="[font-variant-numeric:tabular-nums]">
-                  ${reusedSavings.toFixed(2)}
-                </strong>
-              </div>
-            </div>
-          </Card>
-
-          {/* PER-CRITERION EDITS ---------------------------------------- */}
-          {editedIds.length === 0 && criteria.length > 0 && (
-            <Banner kind="info" title="Pick at least one criterion to edit.">
-              No edits, no new iteration. If you want to re-score everything
-              from scratch, head back to History and roll forward from there.
+          {criteria.length === 0 && (
+            <Banner kind="info" title="No criteria yet">
+              Save the project's rubric before creating an iteration.
             </Banner>
           )}
 
-          {editedIds.map((id) => {
-            const row = criteria.find((c) => c.id === id)!;
-            return (
-              <CriterionEditor
-                key={id}
-                row={row}
-                projectId={projectId ?? 0}
-                parentIterationId={parentIteration?.id ?? null}
-                fromVersion={fromVersion}
-                toVersion={toVersion}
-                isOpen={effectiveExpanded === id}
-                onToggle={() =>
-                  setExpanded(effectiveExpanded === id ? null : id)
-                }
-                promptText={editedPromptText[id]}
-                onPromptChange={(text) =>
-                  setEditedPromptText((s) => ({ ...s, [id]: text }))
-                }
-                disagreements={disagreementsByCriterion[id] ?? []}
-                lessonCap={lessonCap}
-              />
-            );
-          })}
+          {criteria.length > 0 && (
+            <div className="flex items-start justify-between gap-3">
+              <div
+                className="text-xs px-3 py-2 rounded-[var(--radius-sm)] flex-1"
+                style={{
+                  background: "var(--bg-sunken)",
+                  color: "var(--fg-muted)",
+                  lineHeight: 1.5,
+                }}
+              >
+                Each criterion shows the system prompt v{fromVersion} uses
+                today. Edit any of them to refine v{toVersion}; untouched
+                criteria are inherited verbatim and don't trigger re-scoring.
+              </div>
+              <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
+                <button
+                  className="btn btn-sm btn-ghost"
+                  onClick={() =>
+                    setOpenIds(new Set(criteria.map((c) => c.id)))
+                  }
+                  disabled={openIds.size === criteria.length}
+                >
+                  Expand all
+                </button>
+                <button
+                  className="btn btn-sm btn-ghost"
+                  onClick={() => setOpenIds(new Set())}
+                  disabled={openIds.size === 0}
+                >
+                  Collapse all
+                </button>
+              </div>
+            </div>
+          )}
+
+          {criteria.map((c) => (
+            <CriterionEditor
+              key={c.id}
+              row={c}
+              projectId={projectId ?? 0}
+              parentIterationId={parentIteration?.id ?? null}
+              parentSystemPrompt={parentPromptByCriterion[c.id] ?? null}
+              fromVersion={fromVersion}
+              toVersion={toVersion}
+              isEdited={editedIds.includes(c.id)}
+              isOpen={openIds.has(c.id)}
+              onToggle={() => toggleOpen(c.id)}
+              promptText={editedPromptText[c.id]}
+              onPromptChange={(text) =>
+                setEditedPromptText((s) => ({ ...s, [c.id]: text }))
+              }
+              disagreementCount={
+                (disagreementsByCriterion[c.id] ?? []).filter(
+                  (d) => d.delta !== 0,
+                ).length
+              }
+              lessonCap={lessonCap}
+            />
+          ))}
 
           {/* AFTER CREATE ------------------------------------------------ */}
           {editedIds.length > 0 && (
@@ -681,49 +569,6 @@ export function CreateIterationPage() {
             </div>
           </Card>
 
-          {/* RAIL: per-version-per-criterion lock surface */}
-          <div className="mt-4">
-            <Card
-              noPad
-              title="Per-criterion versions"
-              desc="Each criterion's effective version after this run."
-            >
-              <div className="py-1">
-                {criteria.map((c) => {
-                  const isEdit = !!edited[c.id];
-                  return (
-                    <div
-                      key={c.id}
-                      className="flex items-center justify-between px-4 py-2"
-                      style={{
-                        borderBottom: "1px solid var(--border)",
-                      }}
-                    >
-                      <span className="font-mono text-xs">Crit {c.id}</span>
-                      <span className="flex items-center gap-1.5">
-                        <span
-                          className="font-mono text-[11px]"
-                          style={{ color: "var(--fg-faint)" }}
-                        >
-                          v{fromVersion}
-                        </span>
-                        <ArrowRight
-                          className="w-2.5 h-2.5"
-                          style={{ color: "var(--fg-faint)" }}
-                        />
-                        <span
-                          className={`pill ${isEdit ? "pill-accent" : ""} text-[10px]`}
-                        >
-                          v{isEdit ? toVersion : fromVersion}
-                          {!isEdit && " (reused)"}
-                        </span>
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </Card>
-          </div>
         </div>
       </div>
     </div>
@@ -738,37 +583,52 @@ function CriterionEditor({
   row,
   projectId,
   parentIterationId,
+  parentSystemPrompt,
   fromVersion,
   toVersion,
+  isEdited,
   isOpen,
   onToggle,
   promptText,
   onPromptChange,
-  disagreements,
+  disagreementCount,
   lessonCap,
 }: {
   row: CriterionRow;
   projectId: number;
   parentIterationId: number | null;
+  /** The actual system prompt v(N) used for this criterion. The operator
+   *  edits a copy of this; their changes only take effect when the new
+   *  iteration is created. */
+  parentSystemPrompt: string | null;
   fromVersion: number;
   toVersion: number;
+  /** True when the operator has changed this criterion's prompt vs the
+   *  parent's stored text. Drives the "Edited" badge + cost rail. */
+  isEdited: boolean;
   isOpen: boolean;
   onToggle: () => void;
-  /** Lifted prompt text — undefined falls back to a generated default. */
+  /** Lifted prompt text — undefined falls back to the parent's stored prompt
+   *  (or, if there's no parent yet, a minimal stub). */
   promptText: string | undefined;
   onPromptChange: (text: string) => void;
-  disagreements: DisagreementItem[];
+  /** Pre-computed count of disagreements vs parent — header summary only.
+   *  Full data lives behind the SelectExamplesModal now. */
+  disagreementCount: number;
+  /** Cap passed through to the suggest-prompt call. */
   lessonCap: number;
 }) {
-  const [tab, setTab] = useState<"prompt" | "lessons" | "examples">("prompt");
+  const [tab, setTab] = useState<"prompt" | "examples">("prompt");
+  const [showExamplesModal, setShowExamplesModal] = useState(false);
+  // Default to the parent iteration's stored prompt — what the LLM is
+  // actually using today. Editing starts from there, not a fresh stub.
   const defaultPrompt =
-    `## Criterion ${row.id} — ${row.name}\n` +
-    `Description: ${row.description}\n` +
-    `Scale: 1 to 3\n`;
+    parentSystemPrompt ??
+    `## ${row.name}\n` +
+      (row.description ? `${row.description}\n` : "") +
+      `(No parent iteration — this is a fresh prompt. The system will auto-render the rubric block on save.)\n`;
   const prompt = promptText ?? defaultPrompt;
   const setPrompt = onPromptChange;
-  const [maxExamples, setMaxExamples] = useState(8);
-  const [lessonsOn, setLessonsOn] = useState(true);
 
   const suggestMut = useSuggestPrompt(projectId);
   const suggestion = suggestMut.data ?? null;
@@ -785,23 +645,19 @@ function CriterionEditor({
   // Real calibration examples, fetched per criterion when this editor renders.
   const examplesQ = useCalibrationExamples(projectId, row.id);
   const examples = examplesQ.data?.examples ?? [];
-  const exampleCount = examples.filter((e) => e.is_active).length;
-
-  // "Lessons from v(N)": the parent iteration's disagreements where the LLM
-  // diverged from the human median, capped at the operator-set cap. We
-  // don't filter by `flag === human_correct` here because the disagreements
-  // endpoint already returns the candidate triage list — many won't be
-  // flagged yet, but they're still useful as in-prompt teaching signal.
-  const lessons = disagreements
-    .filter((d) => d.delta !== 0)
-    .slice(0, lessonCap);
-  const errorCount = disagreements.filter((d) => d.delta !== 0).length;
+  const activeExamples = examples.filter((e) => e.is_active);
+  const exampleCount = activeExamples.length;
+  const errorCount = disagreementCount;
 
   return (
     <div
       className="card"
       style={{
-        borderColor: isOpen ? "var(--accent-border)" : "var(--border)",
+        borderColor: isEdited
+          ? "var(--accent)"
+          : isOpen
+            ? "var(--accent-border)"
+            : "var(--border)",
         transition: "border-color 80ms ease",
       }}
     >
@@ -809,7 +665,11 @@ function CriterionEditor({
         onClick={onToggle}
         style={{
           width: "100%",
-          background: isOpen ? "var(--accent-bg)" : "var(--bg-elevated)",
+          background: isOpen
+            ? isEdited
+              ? "var(--accent-bg)"
+              : "var(--bg-elevated)"
+            : "var(--bg-elevated)",
           border: "none",
           borderBottom: isOpen ? "1px solid var(--accent-border)" : "none",
           padding: "14px 20px",
@@ -832,22 +692,44 @@ function CriterionEditor({
           />
         )}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-xs font-semibold">
-              Criterion {row.id}
-            </span>
-            <span className="font-medium text-sm truncate">{row.name}</span>
+          <div className="font-medium text-sm truncate" title={row.description}>
+            {row.name}
           </div>
           <div
-            className="text-[11px] mt-0.5"
+            className="text-[11px] mt-0.5 flex items-center gap-2 flex-wrap"
             style={{ color: "var(--fg-muted)" }}
           >
-            {errorCount} flagged disagreement
-            {errorCount === 1 ? "" : "s"} from v{fromVersion} ·{" "}
-            {exampleCount} active calibration examples
+            <span
+              className="flex items-center gap-1"
+              title={`LLM-H QWK on v${fromVersion} dev split vs the H-H baseline ceiling`}
+            >
+              <TrafficLight
+                status={trafficStatusFor(row.llmH, { qwkLow: row.qwkLow })}
+              />
+              <span className="[font-variant-numeric:tabular-nums]">
+                LLM-H {row.llmH.toFixed(2)}
+              </span>
+              <span style={{ color: "var(--fg-faint)" }}>
+                / H-H {row.qwk.toFixed(2)}
+              </span>
+            </span>
+            <span style={{ color: "var(--fg-faint)" }}>·</span>
+            <span>
+              {errorCount} flagged disagreement
+              {errorCount === 1 ? "" : "s"}
+            </span>
+            <span style={{ color: "var(--fg-faint)" }}>·</span>
+            <span>{exampleCount} active examples</span>
           </div>
         </div>
-        {!isOpen && <span className="pill text-[10px]">Edit</span>}
+        <span
+          className={`pill text-[10px] ${isEdited ? "pill-accent" : ""}`}
+          style={{ flexShrink: 0 }}
+        >
+          {isEdited
+            ? `Edited → v${toVersion}`
+            : `Reused from v${fromVersion}`}
+        </span>
       </button>
 
       {isOpen && (
@@ -863,7 +745,6 @@ function CriterionEditor({
             {(
               [
                 ["prompt", "Prompt", Pencil],
-                ["lessons", `Lessons from v${fromVersion}`, Flag],
                 ["examples", `Examples (${exampleCount})`, Layers],
               ] as const
             ).map(([k, label, Ic]) => (
@@ -1023,220 +904,146 @@ function CriterionEditor({
             </div>
           )}
 
-          {/* LESSONS TAB */}
-          {tab === "lessons" && (
-            <div>
-              <div className="flex items-center justify-between mb-2.5">
-                <div>
-                  <div className="text-sm font-medium">
-                    What v{fromVersion} got wrong
-                  </div>
-                  <div
-                    className="text-xs"
-                    style={{ color: "var(--fg-muted)" }}
-                  >
-                    Auto-built from disagreement_flags where you tagged "human
-                    correct". Rendered as a "Lessons" block in the prompt.
-                  </div>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span
-                    className="text-xs"
-                    style={{ color: "var(--fg-muted)" }}
-                  >
-                    Include in prompt
-                  </span>
-                  <Toggle
-                    on={lessonsOn}
-                    onToggle={() => setLessonsOn((v) => !v)}
-                  />
-                </div>
-              </div>
-
-              <div className="grid gap-2">
-                {lessons.length === 0 && (
-                  <div
-                    className="text-xs italic px-2 py-3"
-                    style={{ color: "var(--fg-faint)" }}
-                  >
-                    No disagreements found for this criterion on the parent
-                    iteration's dev split — there's nothing to teach v
-                    {toVersion} from yet. Score v{fromVersion} on dev first.
-                  </div>
-                )}
-                {lessons.map((l) => (
-                  <div
-                    key={l.application_id}
-                    style={{
-                      background: "var(--bg-elevated)",
-                      border: "1px solid var(--border)",
-                      borderRadius: "var(--radius-sm)",
-                      padding: "10px 14px",
-                    }}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-xs font-medium">
-                          {l.application_external_id}
-                        </span>
-                        <span className="pill text-[10px]">
-                          LLM <strong>{l.llm_score}</strong>
-                          <span
-                            className="mx-1"
-                            style={{ color: "var(--fg-faint)" }}
-                          >
-                            vs human
-                          </span>
-                          <strong>{l.human_median}</strong>
-                        </span>
-                      </div>
-                      <button
-                        className="btn btn-sm btn-ghost"
-                        title="Promote to a calibration_example for future iterations"
-                      >
-                        <Plus className="w-2.5 h-2.5" /> Promote to example
-                      </button>
-                    </div>
-                    <div
-                      className="text-xs leading-relaxed"
-                      style={{ color: "var(--fg-muted)" }}
-                    >
-                      {l.llm_reasoning ?? l.excerpt}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div
-                className="mt-3 px-3 py-2.5 text-xs leading-relaxed"
-                style={{
-                  background: "var(--info-bg)",
-                  border: "1px solid var(--info-border)",
-                  borderRadius: "var(--radius-sm)",
-                  color: "var(--fg-muted)",
-                }}
-              >
-                <strong style={{ color: "var(--info)" }}>
-                  Why a separate section, not auto-promoting to examples?
-                </strong>{" "}
-                Lessons are scoped to v{toVersion}. Promoting them mutates a
-                shared resource as a side effect of one iteration — keep that
-                explicit, per-row.
-              </div>
-            </div>
-          )}
-
           {/* EXAMPLES TAB */}
           {tab === "examples" && (
-            <div>
-              <div className="flex items-center justify-between mb-2.5">
-                <div>
-                  <div className="text-sm font-medium">
-                    Calibration examples for this prompt
-                  </div>
-                  <div
-                    className="text-xs"
-                    style={{ color: "var(--fg-muted)" }}
-                  >
-                    Default: include all <code>is_active=1</code>. Sort affects
-                    display order; toggle off to exclude.
-                  </div>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span
-                    className="text-xs"
-                    style={{ color: "var(--fg-muted)" }}
-                  >
-                    Max
-                  </span>
-                  <input
-                    className="input"
-                    type="number"
-                    value={maxExamples}
-                    onChange={(e) =>
-                      setMaxExamples(parseInt(e.target.value) || 0)
-                    }
-                    style={{ width: 64 }}
-                  />
-                </div>
-              </div>
-
-              <div
-                style={{
-                  background: "var(--bg-elevated)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-md)",
-                  overflow: "hidden",
-                }}
-              >
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: 40 }}></th>
-                      <th>Application</th>
-                      <th>Source</th>
-                      <th>Human score</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {examples.length === 0 && (
-                      <tr>
-                        <td colSpan={5}>
-                          <div
-                            className="text-xs italic px-3 py-3"
-                            style={{ color: "var(--fg-faint)" }}
-                          >
-                            {examplesQ.isLoading
-                              ? "Loading…"
-                              : "No calibration examples for this criterion yet. Generate them from disagreements once v" +
-                                fromVersion +
-                                " is scored."}
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                    {examples.map((ex) => (
-                      <tr key={ex.id}>
-                        <td>
-                          <Toggle on={ex.is_active} />
-                        </td>
-                        <td className="font-mono text-xs">
-                          {ex.application_external_id}
-                        </td>
-                        <td>
-                          <span
-                            className={`pill ${
-                              ex.source === "operator_flagged"
-                                ? "pill-accent"
-                                : ex.source === "evaluator_consensus"
-                                  ? "pill-info"
-                                  : ""
-                            } text-[10px]`}
-                          >
-                            {ex.source}
-                          </span>
-                        </td>
-                        <td className="[font-variant-numeric:tabular-nums]">
-                          {ex.human_score}
-                        </td>
-                        <td>
-                          <button
-                            className="btn btn-sm btn-ghost"
-                            title={ex.synthesized_reasoning}
-                          >
-                            <Eye className="w-2.5 h-2.5" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            <ExamplesTabBody
+              activeExamples={activeExamples}
+              isLoading={examplesQ.isLoading}
+              parentIterationId={parentIterationId}
+              fromVersion={fromVersion}
+              onOpenModal={() => setShowExamplesModal(true)}
+            />
           )}
         </div>
       )}
+
+      {showExamplesModal && (
+        <SelectExamplesModal
+          projectId={projectId}
+          criterionId={row.id}
+          criterionName={row.name}
+          parentIterationId={parentIterationId}
+          onClose={() => setShowExamplesModal(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ //
+// Examples tab body — compact active-set display + modal trigger
+// ------------------------------------------------------------------ //
+
+function ExamplesTabBody({
+  activeExamples,
+  isLoading,
+  parentIterationId,
+  fromVersion,
+  onOpenModal,
+}: {
+  activeExamples: CalibrationExampleItem[];
+  isLoading: boolean;
+  parentIterationId: number | null;
+  fromVersion: number;
+  onOpenModal: () => void;
+}) {
+  if (parentIterationId == null) {
+    return (
+      <div
+        className="text-xs italic px-2 py-3"
+        style={{ color: "var(--fg-muted)" }}
+      >
+        Calibration examples come from v(N)'s scored disagreements and
+        agreements. Create v1 first and score it on dev; then come back to
+        pick examples for v2.
+      </div>
+    );
+  }
+  if (isLoading) {
+    return (
+      <div className="text-xs" style={{ color: "var(--fg-muted)" }}>
+        Loading examples…
+      </div>
+    );
+  }
+  if (activeExamples.length === 0) {
+    return (
+      <div className="grid gap-3">
+        <div className="text-xs" style={{ color: "var(--fg-muted)" }}>
+          No active calibration examples for this criterion. Pick a few
+          disagreements (where v{fromVersion} was wrong) or agreements
+          (where v{fromVersion} got it right) to anchor v(N+1)'s prompt.
+        </div>
+        <button
+          className="btn btn-primary"
+          style={{ alignSelf: "flex-start" }}
+          onClick={onOpenModal}
+        >
+          <Plus className="w-3 h-3" /> Select examples
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="grid gap-2">
+      <div
+        className="text-xs"
+        style={{ color: "var(--fg-muted)" }}
+      >
+        {activeExamples.length} active example
+        {activeExamples.length === 1 ? "" : "s"} will be injected into the
+        prompt at scoring time.
+      </div>
+      <div
+        style={{
+          background: "var(--bg-elevated)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-sm)",
+          overflow: "hidden",
+        }}
+      >
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Application</th>
+              <th>Source</th>
+              <th>Human score</th>
+            </tr>
+          </thead>
+          <tbody>
+            {activeExamples.map((ex) => (
+              <tr key={ex.id}>
+                <td className="font-mono text-xs">
+                  {ex.application_external_id}
+                </td>
+                <td>
+                  <span
+                    className={`pill ${
+                      ex.source === "operator_flagged"
+                        ? "pill-accent"
+                        : ex.source === "evaluator_consensus"
+                          ? "pill-info"
+                          : ""
+                    } text-[10px]`}
+                  >
+                    {ex.source}
+                  </span>
+                </td>
+                <td className="[font-variant-numeric:tabular-nums]">
+                  {ex.human_score}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <button
+        className="btn"
+        style={{ alignSelf: "flex-start" }}
+        onClick={onOpenModal}
+      >
+        Manage examples
+      </button>
     </div>
   );
 }
@@ -1330,39 +1137,6 @@ function CheckRow({
         )}
       </div>
     </label>
-  );
-}
-
-function Toggle({ on, onToggle }: { on: boolean; onToggle?: () => void }) {
-  return (
-    <span
-      onClick={onToggle}
-      style={{
-        display: "inline-block",
-        width: 28,
-        height: 16,
-        borderRadius: 999,
-        background: on ? "var(--accent)" : "var(--border-strong)",
-        position: "relative",
-        transition: "background 80ms ease",
-        flexShrink: 0,
-        cursor: onToggle ? "pointer" : "default",
-      }}
-    >
-      <span
-        style={{
-          position: "absolute",
-          top: 2,
-          left: on ? 14 : 2,
-          width: 12,
-          height: 12,
-          borderRadius: "50%",
-          background: "white",
-          transition: "left 120ms ease",
-          boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
-        }}
-      />
-    </span>
   );
 }
 

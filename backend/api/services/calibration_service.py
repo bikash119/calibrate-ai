@@ -160,6 +160,104 @@ class CalibrationService:
         self.audit.log("calibration_example", example_id, "active_set",
                        user_id=user_id, details={"is_active": is_active})
 
+    def promote_single(
+        self,
+        project_id: int,
+        criterion_id: int,
+        application_id: int,
+        human_score: int,
+        source: str,
+        user_id: int,
+    ) -> dict:
+        """Insert a single calibration example for one (criterion, application).
+
+        Used by the SelectExamplesModal: the operator picks a specific
+        disagreement (LLM ≠ human) or agreement (LLM = human) and promotes
+        it. The reasoning is auto-LLM-generated via _synthesize_reasoning so
+        the operator doesn't have to type it.
+
+        Returns the new example in the same shape `list_for_criterion` uses.
+        """
+        if not self.project_repo.get_by_id(project_id):
+            raise ValueError(f"Project {project_id} not found")
+        crit = self.criteria_repo.get_by_id(criterion_id)
+        if not crit or crit.project_id != project_id:
+            raise ValueError(
+                f"Criterion {criterion_id} not found in project {project_id}"
+            )
+        app = self.app_repo.get_by_id(application_id)
+        if not app or app.project_id != project_id:
+            raise ValueError(
+                f"Application {application_id} not found in project {project_id}"
+            )
+        if not (crit.scale_min <= human_score <= crit.scale_max):
+            raise ValueError(
+                f"human_score {human_score} is outside the criterion's "
+                f"{crit.scale_min}..{crit.scale_max} scale"
+            )
+        if source not in ("operator_flagged", "evaluator_consensus", "auto", "manual"):
+            raise ValueError(
+                f"Invalid source '{source}'. Use one of: operator_flagged, "
+                f"evaluator_consensus, auto, manual."
+            )
+
+        # Build the candidate dict the existing reasoning helper expects.
+        questions_by_key = {
+            q.key: q for q in self.question_repo.get_by_project(project_id)
+        }
+        feeding_keys = json.loads(crit.feeding_question_keys_json or "[]")
+        weighted_keys = set(json.loads(crit.weighted_question_keys_json or "[]"))
+        candidate = {
+            "application_id": application_id,
+            "external_id": app.external_id,
+            "human_score": human_score,
+            "condensed_answers": _condense_answers(
+                app, feeding_keys, weighted_keys, questions_by_key,
+            ),
+            "source": source,
+        }
+
+        anchors = json.loads(crit.anchor_descriptions_json or "{}")
+        client = get_llm_client()
+        reasoning = _synthesize_reasoning(client, crit, anchors, candidate)
+
+        # Append-after-existing for sort order (keeps explicit promotions at
+        # the end of the list — operators can re-sort later if needed).
+        existing = self.example_repo.get_for_criterion(
+            project_id, criterion_id, active_only=False,
+        )
+        next_sort = max((ex.sort_order for ex in existing), default=-1) + 1
+
+        new_id = self.example_repo.create(CalibrationExample(
+            project_id=project_id,
+            criterion_id=criterion_id,
+            application_id=application_id,
+            human_score=human_score,
+            synthesized_reasoning=reasoning,
+            condensed_answers_json=json.dumps(
+                candidate["condensed_answers"], ensure_ascii=False,
+            ),
+            source=source,
+            is_active=1,
+            sort_order=next_sort,
+        ))
+        self.audit.log("calibration_example", new_id, "promoted",
+                       user_id=user_id, details={
+                           "project_id": project_id,
+                           "criterion_id": criterion_id,
+                           "application_id": application_id,
+                           "human_score": human_score,
+                           "source": source,
+                       })
+        # Reload to get the row with timestamp + id populated.
+        rows = self.example_repo.get_for_criterion(
+            project_id, criterion_id, active_only=False,
+        )
+        new_row = next((r for r in rows if r.id == new_id), None)
+        if new_row is None:
+            raise RuntimeError(f"Just-inserted example {new_id} not readable")
+        return _example_to_dict(new_row, {app.id: app.external_id})
+
     # ------------------------------------------------------------------ #
     # Internals: candidate collection                                    #
     # ------------------------------------------------------------------ #

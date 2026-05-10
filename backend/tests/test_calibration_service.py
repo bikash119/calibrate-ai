@@ -173,3 +173,151 @@ def test_synthesizes_reasoning_via_llm(seeded_db, stub_llm):
     for ex in examples:
         assert ex["synthesized_reasoning"]
         assert "Synthesized" in ex["synthesized_reasoning"]
+
+
+# ============================================================
+# promote_single — one-row promotion from disagreements/agreements
+# ============================================================
+
+
+def test_promote_single_disagreement_creates_example(seeded_db, stub_llm):
+    """Operator picks one application from the SelectExamplesModal's
+    Disagreements tab → row appears in calibration_examples with
+    is_active=1 and LLM-generated reasoning."""
+    from api.services.calibration_service import CalibrationService
+    pid, crit_id, by_ext = _build(seeded_db, [
+        ("a1", [1, 1]),
+        ("a2", [3, 3]),
+    ])
+    service = CalibrationService()
+    before = service.list_for_criterion(pid, crit_id)
+    assert before == []   # nothing seeded
+
+    new = service.promote_single(
+        pid, crit_id, by_ext["a1"], human_score=1,
+        source="operator_flagged", user_id=1,
+    )
+    assert new["application_id"] == by_ext["a1"]
+    assert new["human_score"] == 1
+    assert new["source"] == "operator_flagged"
+    assert new["is_active"] is True
+    assert new["synthesized_reasoning"]   # LLM stub returns non-empty text
+
+    # Doesn't replace existing rows — append, not destroy.
+    second = service.promote_single(
+        pid, crit_id, by_ext["a2"], human_score=3,
+        source="manual", user_id=1,
+    )
+    rows = service.list_for_criterion(pid, crit_id)
+    assert len(rows) == 2
+    sort_orders = sorted(r["sort_order"] for r in rows)
+    assert sort_orders == [0, 1]   # appended, not overlapping
+    assert second["sort_order"] == 1
+
+
+def test_promote_single_agreement_uses_manual_source(seeded_db, stub_llm):
+    """Agreements (LLM=human) get promoted with source='manual' — distinct
+    from operator_flagged so we can tell promoted-positives from
+    promoted-corrections later."""
+    from api.services.calibration_service import CalibrationService
+    pid, crit_id, by_ext = _build(seeded_db, [("a1", [3, 3])])
+    new = CalibrationService().promote_single(
+        pid, crit_id, by_ext["a1"], human_score=3,
+        source="manual", user_id=1,
+    )
+    assert new["source"] == "manual"
+    assert new["human_score"] == 3
+
+
+def test_promote_single_404_for_unknown_application(seeded_db, stub_llm):
+    from api.services.calibration_service import CalibrationService
+    pid, crit_id, _ = _build(seeded_db, [("a1", [1, 1])])
+    with pytest.raises(ValueError, match="Application 999999 not found"):
+        CalibrationService().promote_single(
+            pid, crit_id, 999_999, human_score=1,
+            source="operator_flagged", user_id=1,
+        )
+
+
+def test_promote_single_rejects_score_outside_scale(seeded_db, stub_llm):
+    from api.services.calibration_service import CalibrationService
+    pid, crit_id, by_ext = _build(seeded_db, [("a1", [1, 1])])
+    with pytest.raises(ValueError, match="outside the criterion's"):
+        CalibrationService().promote_single(
+            pid, crit_id, by_ext["a1"], human_score=99,
+            source="operator_flagged", user_id=1,
+        )
+
+
+def test_promote_single_rejects_unknown_source(seeded_db, stub_llm):
+    from api.services.calibration_service import CalibrationService
+    pid, crit_id, by_ext = _build(seeded_db, [("a1", [1, 1])])
+    with pytest.raises(ValueError, match="Invalid source"):
+        CalibrationService().promote_single(
+            pid, crit_id, by_ext["a1"], human_score=1,
+            source="garbage", user_id=1,
+        )
+
+
+# ============================================================
+# Disagreements 'kind' parameter
+# ============================================================
+
+
+def test_disagreements_kind_filters_correctly(seeded_db, stub_llm):
+    """The /disagreements endpoint's kind=agreement returns delta=0 rows;
+    kind=disagreement returns delta!=0 rows; kind=all returns both."""
+    from api.services.calibration_service import CalibrationService  # noqa: F401
+    from api.services.disagreement_service import DisagreementService
+    from db_models import (
+        Iteration, IterationRepository, IterationPrompt, IterationPromptRepository,
+        LlmScore, LlmScoreRepository, ScoringJob, ScoringJobRepository,
+    )
+    pid, crit_id, by_ext = _build(seeded_db, [
+        ("a1", [1, 1]),   # human median = 1
+        ("a2", [3, 3]),   # human median = 3
+        ("a3", [2, 2]),   # human median = 2
+    ])
+    # Create a v1 iteration + prompt + completed scoring job + LLM scores
+    # mimicking real data shapes.
+    it_id = IterationRepository().create(Iteration(
+        project_id=pid, version=1, note=None, created_by=1,
+    ))
+    IterationPromptRepository().bulk_upsert([
+        IterationPrompt(iteration_id=it_id, criterion_id=crit_id, system_prompt="p"),
+    ])
+    job_id = ScoringJobRepository().create(ScoringJob(
+        project_id=pid, iteration_id=it_id, split="dev", status="pending",
+        progress_total=3, provider="claude", model="claude-haiku-4-5",
+    ))
+    ScoringJobRepository().update_status(job_id, "completed")
+    # a1: LLM=1 (matches human=1 → agreement)
+    # a2: LLM=1 (vs human=3 → disagreement, delta=-2)
+    # a3: LLM=2 (matches human=2 → agreement)
+    LlmScoreRepository().bulk_create([
+        LlmScore(job_id=job_id, application_id=by_ext["a1"], criterion_id=crit_id, score=1),
+        LlmScore(job_id=job_id, application_id=by_ext["a2"], criterion_id=crit_id, score=1),
+        LlmScore(job_id=job_id, application_id=by_ext["a3"], criterion_id=crit_id, score=2),
+    ])
+
+    svc = DisagreementService()
+    only_disag = svc.list_disagreements(pid, it_id, "dev", kind="disagreement")
+    assert {r["application_external_id"] for r in only_disag} == {"a2"}
+
+    only_agree = svc.list_disagreements(pid, it_id, "dev", kind="agreement")
+    assert {r["application_external_id"] for r in only_agree} == {"a1", "a3"}
+    assert all(r["delta"] == 0 for r in only_agree)
+
+    both = svc.list_disagreements(pid, it_id, "dev", kind="all")
+    assert {r["application_external_id"] for r in both} == {"a1", "a2", "a3"}
+
+
+def test_disagreements_kind_invalid_raises(seeded_db, stub_llm):
+    from api.services.disagreement_service import DisagreementService
+    pid, crit_id, _ = _build(seeded_db, [("a1", [1, 1])])
+    from db_models import Iteration, IterationRepository
+    it_id = IterationRepository().create(Iteration(
+        project_id=pid, version=1, note=None, created_by=1,
+    ))
+    with pytest.raises(ValueError, match="Invalid kind"):
+        DisagreementService().list_disagreements(pid, it_id, "dev", kind="bogus")

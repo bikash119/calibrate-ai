@@ -721,6 +721,21 @@ class CalibrationExampleSetActiveRequest(BaseModel):
     is_active: bool
 
 
+class PromoteCalibrationExampleRequest(BaseModel):
+    """POST /api/projects/{pid}/criteria/{cid}/calibration-examples/promote.
+
+    Operator picked one specific (criterion, application) pair from the
+    SelectExamplesModal — we materialize it as a calibration example with
+    LLM-generated reasoning. `source` records why we're keeping it:
+      - 'operator_flagged' → promoted from a disagreement the operator
+        decided the LLM got wrong.
+      - 'manual' → promoted from an agreement (LLM was right) the operator
+        wants to use as a positive anchor."""
+    application_id: int
+    human_score: int
+    source: str = "operator_flagged"
+
+
 # ============================================================
 # Locked prompts (immutable artifact)
 # ============================================================

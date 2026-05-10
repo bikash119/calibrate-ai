@@ -31,11 +31,21 @@ def list_disagreements(
     project_id: int,
     iteration_id: int,
     split: str = Query("dev"),
+    kind: str = Query(
+        "disagreement",
+        description="'disagreement' (default), 'agreement', or 'all'",
+    ),
     _: dict = Depends(get_current_user),
 ) -> DisagreementsResponse:
-    """List LLM-vs-human disagreements for an iteration on a split, sorted by |delta| desc."""
+    """List LLM-vs-human comparisons for an iteration on a split, sorted by
+    |delta| desc.
+
+    `kind=disagreement` (legacy default) returns only delta != 0 rows.
+    `kind=agreement` returns only delta == 0 rows. `kind=all` returns both."""
     try:
-        rows = DisagreementService().list_disagreements(project_id, iteration_id, split)
+        rows = DisagreementService().list_disagreements(
+            project_id, iteration_id, split, kind=kind,
+        )
     except ValueError as e:
         msg = str(e).lower()
         if "not found" in msg:

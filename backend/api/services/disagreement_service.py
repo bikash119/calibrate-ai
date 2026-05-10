@@ -51,13 +51,27 @@ class DisagreementService:
         project_id: int,
         iteration_id: int,
         split: str = "dev",
+        *,
+        kind: str = "disagreement",
     ) -> list[dict]:
-        """Return disagreement entries sorted by abs(delta) descending."""
+        """Return scoring-comparison entries sorted by abs(delta) descending.
+
+        `kind` controls which rows are returned:
+          - 'disagreement' (default, legacy): delta != 0 only.
+          - 'agreement': delta == 0 only — used by the SelectExamplesModal
+            so the operator can promote LLM-correct cases as positive
+            anchors in v(N+1)'s prompt.
+          - 'all': both, in one list.
+        """
         iteration = self.iteration_repo.get_by_id(iteration_id)
         if not iteration or iteration.project_id != project_id:
             raise ValueError(f"Iteration {iteration_id} not found in project {project_id}")
         if split not in ("dev", "validation", "test"):
             raise ValueError(f"Invalid split '{split}'")
+        if kind not in ("disagreement", "agreement", "all"):
+            raise ValueError(
+                f"Invalid kind '{kind}'. Use 'disagreement', 'agreement', or 'all'."
+            )
 
         # Latest completed (iteration, split) job
         jobs = [
@@ -95,8 +109,10 @@ class DisagreementService:
                 continue   # no human comparison available
             median = float(stdlib_stats.median(humans))
             delta = float(s.score) - median
-            if delta == 0:
-                continue   # skip exact agreements
+            if kind == "disagreement" and delta == 0:
+                continue   # caller wants only divergences
+            if kind == "agreement" and delta != 0:
+                continue   # caller wants only LLM-correct cases
 
             crit = criteria_by_id.get(s.criterion_id)
             if not crit:
