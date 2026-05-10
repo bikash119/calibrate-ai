@@ -174,9 +174,27 @@ export const RubricSaveRequestSchema = z.object({
   criteria: z.array(CriterionInputSchema),
 });
 export const RubricExtractTextRequestSchema = z.object({ text: z.string() });
-export const RubricExtractResponseSchema = z.object({
-  criteria: z.array(CriterionInputSchema),
+// Extraction adds binder diagnostics (refs the LLM extracted but the binder
+// could not match to a question). The UI surfaces these as warnings; they
+// are not persisted on save.
+export const ExtractedCriterionSchema = CriterionInputSchema.extend({
+  unbound_feeding_refs: z.array(z.string()).default([]),
+  unbound_weighted_refs: z.array(z.string()).default([]),
 });
+export const RubricExtractResponseSchema = z.object({
+  criteria: z.array(ExtractedCriterionSchema),
+});
+export type ExtractedCriterion = z.infer<typeof ExtractedCriterionSchema>;
+
+export const PromptPreviewResponseSchema = z.object({
+  criterion_id: z.number(),
+  criterion_name: z.string(),
+  application_id: z.number().nullable(),
+  application_external_id: z.string().nullable(),
+  system_prompt: z.string(),
+  user_prompt: z.string().nullable(),
+});
+export type PromptPreviewResponse = z.infer<typeof PromptPreviewResponseSchema>;
 export type CriterionItem = z.infer<typeof CriterionItemSchema>;
 export type RubricResponse = z.infer<typeof RubricResponseSchema>;
 export type CriterionInput = z.infer<typeof CriterionInputSchema>;
@@ -194,6 +212,7 @@ export const QuestionItemSchema = z.object({
   text: z.string(),
   type: QuestionTypeSchema,
   sort_order: z.number(),
+  column_index: z.number().nullable().optional(),
 });
 export const QuestionsResponseSchema = z.object({
   project_id: z.number(),

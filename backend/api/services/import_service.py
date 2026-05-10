@@ -180,6 +180,7 @@ class ImportService:
                 text=text,
                 type=cm["role"],
                 sort_order=i,
+                column_index=cm["column_index"],
             ))
             question_keys.append(key)
 

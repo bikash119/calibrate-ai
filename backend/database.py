@@ -150,6 +150,10 @@ CREATE TABLE IF NOT EXISTS questions (
     type TEXT NOT NULL DEFAULT 'question'
         CHECK(type IN ('question', 'demographic', 'metadata')),
     sort_order INTEGER NOT NULL DEFAULT 0,
+    -- 0-based source-spreadsheet column index. Preserved so the rubric editor
+    -- can show "Col N" alongside q-keys, and so rubric-extracted column refs
+    -- ("see column 8") can be bound back to the right question.
+    column_index INTEGER,
     UNIQUE(project_id, key)
 );
 CREATE INDEX IF NOT EXISTS idx_questions_project ON questions(project_id);

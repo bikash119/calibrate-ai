@@ -390,6 +390,7 @@ class Question:
     text: str = ""
     type: str = "question"   # 'question' | 'demographic' | 'metadata'
     sort_order: int = 0
+    column_index: int | None = None   # 0-based source spreadsheet column
 
 
 class QuestionRepository:
@@ -421,9 +422,10 @@ class QuestionRepository:
     def create(self, question: Question) -> int:
         with get_db_cursor() as cursor:
             cursor.execute(
-                """INSERT INTO questions (project_id, key, text, type, sort_order)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (question.project_id, question.key, question.text, question.type, question.sort_order),
+                """INSERT INTO questions (project_id, key, text, type, sort_order, column_index)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (question.project_id, question.key, question.text, question.type,
+                 question.sort_order, question.column_index),
             )
             return cursor.lastrowid
 
@@ -433,9 +435,9 @@ class QuestionRepository:
             cursor.execute("DELETE FROM questions WHERE project_id = ?", (project_id,))
             for q in questions:
                 cursor.execute(
-                    """INSERT INTO questions (project_id, key, text, type, sort_order)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (project_id, q.key, q.text, q.type, q.sort_order),
+                    """INSERT INTO questions (project_id, key, text, type, sort_order, column_index)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (project_id, q.key, q.text, q.type, q.sort_order, q.column_index),
                 )
 
 

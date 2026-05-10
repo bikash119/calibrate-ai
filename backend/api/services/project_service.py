@@ -221,6 +221,7 @@ class ProjectService:
                 text=q.text,
                 type=q.type,
                 sort_order=q.sort_order,
+                column_index=q.column_index,
             )
             for q in old_questions
         ])

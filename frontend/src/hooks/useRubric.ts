@@ -2,8 +2,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "../api/client";
 import {
+  PromptPreviewResponseSchema,
   RubricExtractResponseSchema,
   RubricResponseSchema,
+  type PromptPreviewResponse,
   type RubricExtractResponse,
   type RubricResponse,
   type RubricSaveRequest,
@@ -41,6 +43,30 @@ export function useExtractRubricText(projectId: number) {
         RubricExtractResponseSchema,
         { method: "POST", body: JSON.stringify({ text }) },
       ),
+  });
+}
+
+/**
+ * Render the would-be LLM prompts for a (criterion, application) pair —
+ * read-only debug view. Renders system + user prompt as the real scorer
+ * would build them, so operators can sanity-check the rubric before scoring.
+ */
+export function usePromptPreview(
+  projectId: number | undefined,
+  criterionId: number | undefined,
+  applicationId: number | undefined,
+  enabled = true,
+) {
+  return useQuery<PromptPreviewResponse>({
+    queryKey: ["prompt-preview", projectId, criterionId, applicationId ?? null],
+    queryFn: () => {
+      const qs = applicationId !== undefined ? `?application_id=${applicationId}` : "";
+      return apiFetch(
+        `/projects/${projectId}/criteria/${criterionId}/prompt-preview${qs}`,
+        PromptPreviewResponseSchema,
+      );
+    },
+    enabled: enabled && projectId !== undefined && criterionId !== undefined,
   });
 }
 

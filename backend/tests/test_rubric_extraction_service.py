@@ -9,6 +9,7 @@ from api.services.rubric_extraction_service import (
     RubricExtractionError,
     RubricExtractionService,
 )
+from db_models import Question
 
 
 class _ScriptedLLM:
@@ -258,3 +259,189 @@ def test_extract_rejects_pdf():
 def test_extract_rejects_unknown_extension():
     with pytest.raises(RubricExtractionError, match="Unsupported file type"):
         RubricExtractionService().extract_from_file(b"x", "rubric.zip")
+
+
+# ------------------------------------------------------------------ #
+# Ref binding                                                        #
+# ------------------------------------------------------------------ #
+
+
+def _qs(*specs: tuple[str, str, int]) -> list[Question]:
+    """Helper: list of Questions from (key, text, column_index) tuples."""
+    return [
+        Question(id=i + 1, project_id=1, key=k, text=t, column_index=col)
+        for i, (k, t, col) in enumerate(specs)
+    ]
+
+
+def test_binding_resolves_pure_numeric_refs_via_column_index(patch_llm):
+    """Rubric: 'columns 8 and 9'. Dataset key q1 came from spreadsheet column
+    index 7 (col 8 in 1-based). The binder must map '8' → 'q1'."""
+    patch_llm(json.dumps({
+        "criteria": [
+            {"name": "team", "description": "Team",
+             "scale_min": 1, "scale_max": 3,
+             "anchor_descriptions": {"1": "weak", "2": "ok", "3": "strong"},
+             "feeding_question_keys": ["8", "9"],
+             "weighted_question_keys": ["9"]},
+        ],
+    }))
+    questions = _qs(
+        ("q1", "Tim ima znanja", 7),  # col 8 (1-based)
+        ("q2", "Iskustvo", 8),         # col 9
+        ("q3", "Other", 9),
+    )
+    criteria = RubricExtractionService().extract_from_text("rubric", questions=questions)
+    c = criteria[0]
+    assert c["feeding_question_keys"] == ["q1", "q2"]
+    assert c["weighted_question_keys"] == ["q2"]
+    assert c["unbound_feeding_refs"] == []
+
+
+def test_binding_resolves_q_prefixed_refs(patch_llm):
+    patch_llm(json.dumps({
+        "criteria": [
+            {"name": "x", "description": "x",
+             "scale_min": 1, "scale_max": 3,
+             "anchor_descriptions": {"1": "a", "2": "b", "3": "c"},
+             "feeding_question_keys": ["Q1", "q03"],
+             "weighted_question_keys": []},
+        ],
+    }))
+    questions = _qs(("q1", "T1", 0), ("q3", "T3", 2))
+    criteria = RubricExtractionService().extract_from_text("rubric", questions=questions)
+    assert criteria[0]["feeding_question_keys"] == ["q1", "q3"]
+
+
+def test_binding_falls_back_to_text_substring(patch_llm):
+    patch_llm(json.dumps({
+        "criteria": [
+            {"name": "x", "description": "x",
+             "scale_min": 1, "scale_max": 3,
+             "anchor_descriptions": {"1": "a", "2": "b", "3": "c"},
+             "feeding_question_keys": ["team experience"],
+             "weighted_question_keys": []},
+        ],
+    }))
+    questions = _qs(
+        ("q1", "Describe your team experience and skills", 0),
+        ("q2", "Market size", 1),
+    )
+    criteria = RubricExtractionService().extract_from_text("rubric", questions=questions)
+    assert criteria[0]["feeding_question_keys"] == ["q1"]
+
+
+def test_binding_surfaces_unbound_refs(patch_llm):
+    patch_llm(json.dumps({
+        "criteria": [
+            {"name": "x", "description": "x",
+             "scale_min": 1, "scale_max": 3,
+             "anchor_descriptions": {"1": "a", "2": "b", "3": "c"},
+             "feeding_question_keys": ["8", "999", "nonsense"],
+             "weighted_question_keys": ["999"]},
+        ],
+    }))
+    questions = _qs(("q1", "First", 7))   # col 8
+    criteria = RubricExtractionService().extract_from_text("rubric", questions=questions)
+    c = criteria[0]
+    assert c["feeding_question_keys"] == ["q1"]
+    assert sorted(c["unbound_feeding_refs"]) == ["999", "nonsense"]
+    # Weighted ref didn't bind, and even if it had it would have been dropped
+    # because its key isn't in feeding.
+    assert c["weighted_question_keys"] == []
+    assert c["unbound_weighted_refs"] == ["999"]
+
+
+def test_binding_skipped_when_no_questions_imported_yet(patch_llm):
+    """Rubric upload before dataset import — leave refs untouched, don't flag."""
+    patch_llm(json.dumps({
+        "criteria": [
+            {"name": "x", "description": "x",
+             "scale_min": 1, "scale_max": 3,
+             "anchor_descriptions": {"1": "a", "2": "b", "3": "c"},
+             "feeding_question_keys": ["8", "9"],
+             "weighted_question_keys": []},
+        ],
+    }))
+    criteria = RubricExtractionService().extract_from_text("rubric")  # no questions
+    assert criteria[0]["feeding_question_keys"] == ["8", "9"]
+    assert criteria[0]["unbound_feeding_refs"] == []
+
+
+def test_extraction_contract_for_question_plus_guidance_format(patch_llm):
+    """Documents the contract for the prospect's rubric format:
+    'Question :' line is the criterion description; 'Guidance for evaluators :'
+    paragraphs are the per-score anchors (descending: first paragraph =
+    scale_max). This test stubs the LLM with a CORRECT extraction; if the
+    extractor's prompt regresses and starts confusing description with the
+    score-3 anchor (or substituting global preamble for anchor text), the
+    integration test against a real LLM should fail. Here we just lock in
+    the downstream shape."""
+    patch_llm(json.dumps({
+        "criteria": [
+            {
+                "name": "team",
+                "description": (
+                    "U kojoj mjeri je tim sposoban iznijeti poduzetnički pothvat?"
+                ),
+                "scale_min": 1,
+                "scale_max": 3,
+                "anchor_descriptions": {
+                    "3": "Tim ima znanja i iskustva za potrebe poduzetničkog pothvata te je izvjesno da može kvalitetno provesti poduzetnički pothvat.",
+                    "2": "Tim nema sva potrebna znanja i iskustva za potrebe poduzetničkog pothvata.",
+                    "1": "S obzirom na sastav tima, postoji rizik o uspješnoj provedbi poduzetničkog pothvata.",
+                },
+                "feeding_question_keys": ["8", "9", "10"],
+                "weighted_question_keys": ["9"],
+            },
+        ],
+    }))
+
+    rubric_text = """
+Scoring logic
+3 points = meets criteria
+2 points = has potential and partially meets criteria
+1 point = it is a zero basically.
+
+**Team**
+Question : U kojoj mjeri je tim sposoban iznijeti poduzetnički pothvat?
+Guidance for evaluators :
+Tim ima znanja i iskustva za potrebe poduzetničkog pothvata te je izvjesno da može kvalitetno provesti poduzetnički pothvat.
+
+Tim nema sva potrebna znanja i iskustva za potrebe poduzetničkog pothvata.
+
+S obzirom na sastav tima, postoji rizik o uspješnoj provedbi poduzetničkog pothvata.
+
+Evaluators use the answers in the following columns to arrive at score: 8, 9, 10. 9 is the most important question here.
+""".strip()
+
+    criteria = RubricExtractionService().extract_from_text(rubric_text)
+    c = criteria[0]
+    # Description is the criterion's QUESTION, not the score-3 anchor text.
+    assert c["description"].startswith("U kojoj mjeri je tim sposoban")
+    # Anchor for score 3 is the per-criterion guidance, NOT the global preamble.
+    assert "Tim ima znanja i iskustva" in c["anchor_descriptions"]["3"]
+    assert "meets criteria" not in c["anchor_descriptions"]["3"]
+    # Lowest anchor reflects the per-criterion risk paragraph, not the legend.
+    assert "rizik" in c["anchor_descriptions"]["1"]
+    assert "Answer is not provided" not in c["anchor_descriptions"]["1"]
+
+
+def test_binding_falls_back_to_q_key_when_column_index_unknown(patch_llm):
+    """Synthetic data with no column_index (e.g. demo seeding) — numeric refs
+    fall back to qN matching."""
+    patch_llm(json.dumps({
+        "criteria": [
+            {"name": "x", "description": "x",
+             "scale_min": 1, "scale_max": 3,
+             "anchor_descriptions": {"1": "a", "2": "b", "3": "c"},
+             "feeding_question_keys": ["3"],
+             "weighted_question_keys": []},
+        ],
+    }))
+    questions = [
+        Question(id=1, project_id=1, key="q1", text="A", column_index=None),
+        Question(id=2, project_id=1, key="q3", text="C", column_index=None),
+    ]
+    criteria = RubricExtractionService().extract_from_text("rubric", questions=questions)
+    assert criteria[0]["feeding_question_keys"] == ["q3"]

@@ -105,7 +105,7 @@ export function ColumnMappingModal({
   const submit = async () => {
     const mappings: ColumnMapping[] = Array.from({ length: numColumns }, (_, i) => ({
       column_index: i,
-      role: roles[i] ?? "exclude",
+      role: roles[i] ?? "question",
     }));
     await onConfirm({
       sheet_name: preview.format === "xlsx" ? activeSheet : null,
@@ -213,7 +213,7 @@ export function ColumnMappingModal({
               {Array.from({ length: numColumns }, (_, c) => {
                 const header = headers[c] ?? "";
                 const sampleVal = sample[c] ?? "";
-                const role = roles[c] ?? "exclude";
+                const role = roles[c] ?? "question";
                 const status: TrafficStatus =
                   role === "exclude" ? "gray" : role === "id" ? "yellow" : "green";
                 return (
@@ -311,10 +311,6 @@ function suggestRoles(
       out[c] = "demographic";
       continue;
     }
-    if (!header) {
-      out[c] = "exclude";
-      continue;
-    }
     out[c] = "question";
   }
 
@@ -330,7 +326,7 @@ function countRoles(
     number
   >;
   for (let c = 0; c < numColumns; c++) {
-    const r = roles[c] ?? "exclude";
+    const r = roles[c] ?? "question";
     counts[r] += 1;
   }
   return counts;
