@@ -76,31 +76,50 @@ export function CreateIterationPage() {
   const iterations = useIterations(projectId);
   const create = useCreateIteration(projectId ?? 0);
 
-  // Use the project's latest iteration as the parent for shape-A inheritance.
-  // If there are no iterations yet (new project), this is a "v1" creation
-  // and the overlay path is bypassed (parent_iteration_id stays null).
+  // Two iterations come into play:
+  //
+  //  - parentIteration: the LATEST iteration. The new iteration inherits
+  //    its prompts (shape A); the backend stores its id as
+  //    `parent_iteration_id`. Doesn't need to have been scored — if the
+  //    operator created v2 as a draft and now wants v3, parent is v2.
+  //
+  //  - signalIteration: the latest iteration that has *completed* dev
+  //    scoring. This is where disagreements / agreements / LLM-H come
+  //    from. Falls back to parentIteration when they're the same. Returns
+  //    null when no iteration has been scored yet — modal will show an
+  //    empty-state instead of silently looking blank.
   const parentIteration = useMemo(() => {
     const list = iterations.data?.iterations ?? [];
     if (list.length === 0) return null;
     return list.reduce((a, b) => (a.version > b.version ? a : b));
   }, [iterations.data]);
 
-  // Lessons + LLM-H come from the parent iteration's dev split.
-  // Detail gives us per-criterion qwk for the traffic light; disagreements
-  // give us "what v(N) got wrong" for each criterion's Lessons tab.
+  const signalIteration = useMemo(() => {
+    const list = iterations.data?.iterations ?? [];
+    const scored = list.filter((it) => (it.dev_metrics?.length ?? 0) > 0);
+    if (scored.length === 0) return null;
+    return scored.reduce((a, b) => (a.version > b.version ? a : b));
+  }, [iterations.data]);
+
+  // Inheritance: prompts come from parentIteration so unedited criteria
+  // carry the latest authored text forward.
   const parentDetail = useIteration(projectId, parentIteration?.id);
-  const parentDisagreements = useDisagreements(
+  // Signal: traffic light + disagreements come from the most recent
+  // completed scoring job, which may be on an earlier iteration.
+  const signalDetail = useIteration(projectId, signalIteration?.id);
+  const signalDisagreements = useDisagreements(
     projectId,
-    parentIteration?.id,
+    signalIteration?.id,
     "dev",
   );
+
   const llmHByCriterion = useMemo(() => {
     const map: Record<number, number> = {};
-    for (const m of parentDetail.data?.dev_metrics ?? []) {
+    for (const m of signalDetail.data?.dev_metrics ?? []) {
       if (m.qwk != null) map[m.criterion_id] = m.qwk;
     }
     return map;
-  }, [parentDetail.data]);
+  }, [signalDetail.data]);
   // The actual system prompt v(N) used for each criterion. This is what
   // the LLM sees at scoring time — the operator's textarea default should
   // match it so they're editing the real thing, not a placeholder.
@@ -113,14 +132,15 @@ export function CreateIterationPage() {
   }, [parentDetail.data]);
   const disagreementsByCriterion = useMemo(() => {
     const map: Record<number, DisagreementItem[]> = {};
-    for (const d of parentDisagreements.data?.disagreements ?? []) {
+    for (const d of signalDisagreements.data?.disagreements ?? []) {
       (map[d.criterion_id] ??= []).push(d);
     }
     return map;
-  }, [parentDisagreements.data]);
+  }, [signalDisagreements.data]);
 
   const fromVersion = parentIteration?.version ?? 0;
   const toVersion = fromVersion + 1;
+  const signalVersion = signalIteration?.version ?? null;
   // Operator is editing prompts directly. The criterion-edit selector below
   // captures the "edited_criterion_ids" set; prompts come from the textarea
   // in each CriterionEditor.
@@ -275,12 +295,37 @@ export function CreateIterationPage() {
             </div>
           )}
 
+          {/* Source-of-signal mismatch banner — when the latest iteration
+              hasn't been scored, examples + LLM-H come from an earlier
+              one. Surface this so the operator isn't confused. */}
+          {parentIteration &&
+            signalIteration &&
+            parentIteration.id !== signalIteration.id && (
+              <Banner kind="info" title={`Inheriting from v${fromVersion}; examples come from v${signalVersion}`}>
+                v{fromVersion} hasn't been scored on the dev split yet, so
+                disagreements / agreements and the per-criterion LLM-H QWK
+                shown below come from v{signalVersion} (the latest scored
+                iteration). v{toVersion}'s prompts still inherit from
+                v{fromVersion} as expected.
+              </Banner>
+            )}
+          {parentIteration && !signalIteration && (
+            <Banner kind="warn" title="No scored iteration yet">
+              v{fromVersion} hasn't been scored on the dev split. The
+              Examples tab will be empty until you score it. You can still
+              edit prompts and create v{toVersion} — just no calibration
+              examples or traffic-light feedback below.
+            </Banner>
+          )}
+
           {criteria.map((c) => (
             <CriterionEditor
               key={c.id}
               row={c}
               projectId={projectId ?? 0}
               parentIterationId={parentIteration?.id ?? null}
+              signalIterationId={signalIteration?.id ?? null}
+              signalVersion={signalVersion}
               parentSystemPrompt={parentPromptByCriterion[c.id] ?? null}
               fromVersion={fromVersion}
               toVersion={toVersion}
@@ -583,6 +628,8 @@ function CriterionEditor({
   row,
   projectId,
   parentIterationId,
+  signalIterationId,
+  signalVersion,
   parentSystemPrompt,
   fromVersion,
   toVersion,
@@ -596,7 +643,16 @@ function CriterionEditor({
 }: {
   row: CriterionRow;
   projectId: number;
+  /** Inherited-from iteration. Submitted as `parent_iteration_id` to the
+   *  backend on Create. May be unscored. */
   parentIterationId: number | null;
+  /** The most-recent iteration with completed dev scoring — source of
+   *  disagreements / agreements for the SelectExamplesModal. Often equal
+   *  to parentIterationId; differs when the operator created an iteration
+   *  but hasn't scored it yet. */
+  signalIterationId: number | null;
+  /** Display version for the signal source ("Showing examples from v3"). */
+  signalVersion: number | null;
   /** The actual system prompt v(N) used for this criterion. The operator
    *  edits a copy of this; their changes only take effect when the new
    *  iteration is created. */
@@ -612,8 +668,8 @@ function CriterionEditor({
    *  (or, if there's no parent yet, a minimal stub). */
   promptText: string | undefined;
   onPromptChange: (text: string) => void;
-  /** Pre-computed count of disagreements vs parent — header summary only.
-   *  Full data lives behind the SelectExamplesModal now. */
+  /** Pre-computed count of disagreements vs the signal iteration — header
+   *  summary only. Full data lives behind the SelectExamplesModal. */
   disagreementCount: number;
   /** Cap passed through to the suggest-prompt call. */
   lessonCap: number;
@@ -909,7 +965,8 @@ function CriterionEditor({
             <ExamplesTabBody
               activeExamples={activeExamples}
               isLoading={examplesQ.isLoading}
-              parentIterationId={parentIterationId}
+              signalIterationId={signalIterationId}
+              signalVersion={signalVersion}
               fromVersion={fromVersion}
               onOpenModal={() => setShowExamplesModal(true)}
             />
@@ -922,7 +979,7 @@ function CriterionEditor({
           projectId={projectId}
           criterionId={row.id}
           criterionName={row.name}
-          parentIterationId={parentIterationId}
+          parentIterationId={signalIterationId}
           onClose={() => setShowExamplesModal(false)}
         />
       )}
@@ -937,25 +994,30 @@ function CriterionEditor({
 function ExamplesTabBody({
   activeExamples,
   isLoading,
-  parentIterationId,
+  signalIterationId,
+  signalVersion,
   fromVersion,
   onOpenModal,
 }: {
   activeExamples: CalibrationExampleItem[];
   isLoading: boolean;
-  parentIterationId: number | null;
+  /** The iteration whose scoring signal the modal will draw from. Null
+   *  when no iteration has been scored yet. */
+  signalIterationId: number | null;
+  signalVersion: number | null;
   fromVersion: number;
   onOpenModal: () => void;
 }) {
-  if (parentIterationId == null) {
+  if (signalIterationId == null) {
     return (
       <div
         className="text-xs italic px-2 py-3"
         style={{ color: "var(--fg-muted)" }}
       >
-        Calibration examples come from v(N)'s scored disagreements and
-        agreements. Create v1 first and score it on dev; then come back to
-        pick examples for v2.
+        Calibration examples come from a scored iteration's disagreements
+        and agreements. {fromVersion > 0
+          ? `v${fromVersion} hasn't been scored on the dev split yet — score it first, then come back to pick examples.`
+          : "Create v1 first and score it on dev; then come back to pick examples for v2."}
       </div>
     );
   }
@@ -971,8 +1033,9 @@ function ExamplesTabBody({
       <div className="grid gap-3">
         <div className="text-xs" style={{ color: "var(--fg-muted)" }}>
           No active calibration examples for this criterion. Pick a few
-          disagreements (where v{fromVersion} was wrong) or agreements
-          (where v{fromVersion} got it right) to anchor v(N+1)'s prompt.
+          disagreements (where v{signalVersion ?? fromVersion} was wrong)
+          or agreements (where v{signalVersion ?? fromVersion} got it
+          right) to anchor v{fromVersion + 1}'s prompt.
         </div>
         <button
           className="btn btn-primary"
